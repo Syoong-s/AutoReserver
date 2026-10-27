@@ -35,6 +35,12 @@ def prepare_windows():
     _DLL_DIRECTORIES.append(os.add_dll_directory(str(root / 'bin')))
     os.environ.update({'GTK_DATA_PREFIX': str(root), 'GSETTINGS_SCHEMA_DIR': str(root / 'share/glib-2.0/schemas'),
                        'GSETTINGS_BACKEND': 'memory', 'DBUS_SESSION_BUS_ADDRESS': 'disabled:', 'GDK_BACKEND': 'win32'})
+    shell = C.WinDLL('shell32', use_last_error=True)
+    identify = shell.SetCurrentProcessExplicitAppUserModelID
+    identify.argtypes, identify.restype = [C.c_wchar_p], C.c_long
+    result = identify('org.autoreserve.Desktop')
+    if result < 0:
+        raise OSError('Cannot set the AutoReserve taskbar identity: ' + str(result))
     user = C.WinDLL('user32', use_last_error=True)
     if hasattr(user, 'SetProcessDpiAwarenessContext'):
         function = user.SetProcessDpiAwarenessContext

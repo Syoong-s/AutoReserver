@@ -27,6 +27,14 @@ GList._fields_ = [('data', P), ('next', C.POINTER(GList)), ('prev', C.POINTER(GL
 
 
 # ==========================================
+# Function: Read GDK monitor geometry in application pixels, including negative monitor origins.
+# Method: Match the public GdkRectangle ABI for scale-aware work area queries.
+# ==========================================
+class Rectangle(C.Structure):
+    _fields_ = [('x', I), ('y', I), ('width', I), ('height', I)]
+
+
+# ==========================================
 # Function: Expose only the native APIs used by the reservation desktop.
 # Method: Declare every function signature and own signal callbacks by widget lifetime.
 # ==========================================
@@ -46,6 +54,8 @@ class GtkNative:
                 'gtk_application_new': (P,S,I), 'gtk_window_set_application': (None,P,P),
                 'gtk_window_new': (P,I), 'gtk_window_present': (None,P), 'gtk_window_close': (None,P),
                 'gtk_window_set_title': (None,P,S), 'gtk_window_set_default_size': (None,P,I,I),
+                'gtk_window_set_icon_from_file': (I,P,S,P), 'gtk_window_get_icon': (P,P),
+                'gtk_window_move': (None,P,I,I),
                 'gtk_window_set_titlebar': (None,P,P), 'gtk_window_get_titlebar': (P,P),
                 'gtk_window_set_transient_for': (None,P,P), 'gtk_window_set_modal': (None,P,I),
                 'gtk_window_set_resizable': (None,P,I), 'gtk_window_get_resizable': (I,P),
@@ -109,7 +119,9 @@ class GtkNative:
             'glib': {'g_error_free': (None,P), 'g_list_free': (None,P), 'g_timeout_add': (U,U,P,P),
                      'g_source_remove': (I,U), 'g_set_prgname': (None,S), 'g_set_application_name': (None,S)},
             'gio': {'g_application_run': (I,P,I,P), 'g_application_quit': (None,P)},
-            'gdk': {'gdk_screen_get_default': (P,), 'gdk_pixbuf_get_from_window': (P,P,I,I,I,I)},
+            'gdk': {'gdk_screen_get_default': (P,), 'gdk_pixbuf_get_from_window': (P,P,I,I,I,I),
+                    'gdk_display_get_default': (P,), 'gdk_display_get_primary_monitor': (P,P),
+                    'gdk_display_get_monitor': (P,P,I), 'gdk_monitor_get_workarea': (None,P,C.POINTER(Rectangle))},
             'pixbuf': {'gdk_pixbuf_savev': (I,P,S,S,P,P,P)},
         }
         for library, entries in signatures.items():
@@ -117,6 +129,31 @@ class GtkNative:
                 function = getattr(self.libs[library], name)
                 function.restype, function.argtypes = signature[0], signature[1:]
                 setattr(self, name, function)
+
+    # ==========================================
+    # Function: Give the Windows workspace an app icon, system titlebar and visible initial geometry.
+    # Method: Configure before realization and use GDK application pixels rather than mixing Win32 device pixels.
+    # ==========================================
+    def configure_desktop_window(self, window):
+        if sys.platform != 'win32':
+            return
+        self.gtk_window_set_titlebar(window, None)
+        error = P()
+        icon = Path(__file__).with_name('gtk_ui') / 'icon.ico'
+        if not self.gtk_window_set_icon_from_file(window, str(icon).encode('utf-8'), C.byref(error)):
+            message = C.cast(error, C.POINTER(GError)).contents.message.decode() if error else 'Cannot load app icon'
+            if error:
+                self.g_error_free(error)
+            raise RuntimeError(message)
+        display = self.gdk_display_get_default()
+        monitor = self.gdk_display_get_primary_monitor(display) or self.gdk_display_get_monitor(display, 0)
+        if monitor:
+            area = Rectangle()
+            self.gdk_monitor_get_workarea(monitor, C.byref(area))
+            width, height = min(1380, max(1, area.width-48)), min(980, max(1, area.height-80))
+            self.gtk_widget_set_size_request(window, min(900,width), min(560,height))
+            self.gtk_window_set_default_size(window, width, height)
+            self.gtk_window_move(window, area.x+(area.width-width)//2, area.y+(area.height-height)//2)
 
     # ==========================================
     # Function: Parse maintained GtkBuilder layout with useful syntax diagnostics.

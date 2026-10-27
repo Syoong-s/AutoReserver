@@ -14,9 +14,12 @@ import tarfile
 import zipfile
 
 ROOT=Path(__file__).resolve().parent.parent
-PUBLIC_DIRS={'autoreserve','scripts','tools','tests','demo','docs','.github','config','native'}
-PUBLIC_FILES={'README.md','README-CN.md','LICENSE','requirements.txt','pyproject.toml','MANIFEST.in',
-              'run.sh','start-gui.sh','test.sh','.gitignore','.gitattributes'}
+RUNTIME_FILES = {
+    'linux': {'requirements.txt', 'run.sh', 'start-gui.sh', 'scripts/launch.py',
+              'scripts/bootstrap.py', 'scripts/bootstrap_native.py', 'scripts/setup_ui.py'},
+    'windows': {'scripts/windows_launch.py', 'scripts/bootstrap_windows.py', 'scripts/windows_smoke.py',
+                'tools/windows_runtime.py', 'native/windows-runtime.lock.json'},
+}
 PRIVATE_PARTS={'.git','.auth','artifacts','.research','__pycache__','.venv','.runtime','build','dist'}
 
 
@@ -33,17 +36,18 @@ def version(root=ROOT):
 
 
 # ==========================================
-# Function: Select public source files independently of Git ignore status.
-# Method: Enforce both top-level and private-path allowlists, including a narrow config exception.
+# Function: Select only application code/assets and the chosen platform's runtime support.
+# Method: Walk the app package and explicitly select bootstrap files; keep repository metadata out of portable bundles.
 # ==========================================
-def public_files(root=ROOT):
+def public_files(root=ROOT, target='linux'):
     root=Path(root)
+    support=RUNTIME_FILES[target]
     result=[]
     candidates=[]
     for directory, folders, files in os.walk(root):
         folders[:]=sorted(d for d in folders if d not in PRIVATE_PARTS and not d.endswith('.egg-info')
                          and not (Path(directory)/d).is_symlink()
-                         and (Path(directory)!=root or d in PUBLIC_DIRS))
+                         and (Path(directory)!=root or d in {'autoreserve','scripts','tools','native'}))
         candidates.extend(Path(directory)/name for name in sorted(files))
     for path in sorted(candidates):
         if not path.is_file() or path.is_symlink():
@@ -51,12 +55,10 @@ def public_files(root=ROOT):
         rel=path.relative_to(root)
         if any(part in PRIVATE_PARTS or part.endswith('.egg-info') for part in rel.parts):
             continue
-        if len(rel.parts)==1:
-            if rel.name not in PUBLIC_FILES:
+        if rel.parts[0]=='autoreserve':
+            if rel.suffix not in {'.py','.ui','.css','.svg','.ico','.html','.js'}:
                 continue
-        elif rel.parts[0] not in PUBLIC_DIRS:
-            continue
-        if rel.parts[0]=='config' and rel.as_posix() not in {'config/README.md','config/example.json','config/.gitignore'}:
+        elif rel.as_posix() not in support:
             continue
         if rel.suffix in {'.pyc','.pyo','.log','.sqlite3','.tmp'}:
             continue
@@ -98,6 +100,8 @@ def build(root=ROOT, output=None):
     release=version(root)
     prefix=f'AutoReserve-{release}'
     entries=public_files(root)
+    if (root/'LICENSE').is_file():
+        entries.append((Path('.runtime/licenses/AutoReserve/LICENSE'),root/'LICENSE'))
     launcher=build_launcher(root)
     if launcher:
         entries.append((Path('AutoReserve'),launcher))

@@ -6,6 +6,7 @@ import tarfile
 import tempfile
 import tomllib
 import unittest
+from unittest.mock import patch
 import zipfile
 
 from tools.release import build,checksums,main,public_files,version
@@ -24,7 +25,13 @@ class ReleaseTests(unittest.TestCase):
         self.temp=tempfile.TemporaryDirectory()
         self.root=Path(self.temp.name)
         public={'autoreserve/__init__.py':'__version__ = "1.2.3"\n','autoreserve/gtk_ui/main.ui':'<interface/>',
-                'README.md':'Public program','LICENSE':'MIT','run.sh':'#!/bin/sh\n','config/example.json':'{}'}
+                'README.md':'Public program','LICENSE':'MIT','run.sh':'#!/bin/sh\n','config/example.json':'{}',
+                '.github/workflows/release.yml':'CI', '.gitignore':'ignored', '.gitattributes':'attributes',
+                'tests/test_private.py':'tests', 'demo/server.py':'demo', 'docs/WINDOWS.md':'docs',
+                'native/windows-launcher.cs':'compiler input', 'native/windows-runtime.lock.json':'{}',
+                'scripts/windows_launch.py':'runtime', 'scripts/bootstrap_windows.py':'runtime',
+                'scripts/windows_smoke.py':'runtime', 'tools/windows_runtime.py':'runtime',
+                'tools/build_windows.py':'builder', 'pyproject.toml':'build metadata'}
         private={'.auth/session.json':'SECRET-AUTH','config/config.json':'SECRET-CONFIG',
                  '.runtime/browsers/chrome':'SECRET-RUNTIME','.venv/lib/private.py':'SECRET-ENV',
                  'config/bootstrap.json':'SECRET-SETUP',
@@ -52,7 +59,9 @@ class ReleaseTests(unittest.TestCase):
         with tarfile.open(assets[0]) as archive:
             names=archive.getnames()
             payload=b''.join(archive.extractfile(m).read() for m in archive.getmembers() if m.isfile())
-            self.assertIn('AutoReserve-1.2.3/config/example.json',names)
+            self.assertIn('AutoReserve-1.2.3/autoreserve/gtk_ui/main.ui',names)
+            self.assertNotIn('AutoReserve-1.2.3/config/example.json',names)
+            self.assertIn('AutoReserve-1.2.3/.runtime/licenses/AutoReserve/LICENSE',names)
             self.assertEqual(archive.getmember('AutoReserve-1.2.3/run.sh').mode,0o755)
         with zipfile.ZipFile(assets[1]) as archive:
             self.assertEqual(set(archive.namelist()),set(names))
@@ -60,6 +69,67 @@ class ReleaseTests(unittest.TestCase):
         self.assertNotIn(b'SECRET',payload)
         self.assertNotIn(b'PERSONAL',payload)
         self.assertFalse(any('/.auth/' in n or '/artifacts/' in n or '__pycache__' in n for n in names))
+
+    # ==========================================
+    # Function: Exclude repository/build/test files and other-platform bootstraps from both portable payloads.
+    # Method: Compare allowlisted paths against deliberately populated source-tree fixtures.
+    # ==========================================
+    def test_portable_payload_contains_only_platform_runtime(self):
+        linux = {rel.as_posix() for rel, _ in public_files(self.root)}
+        windows = {rel.as_posix() for rel, _ in public_files(self.root, target='windows')}
+        self.assertIn('run.sh', linux)
+        self.assertNotIn('run.sh', windows)
+        self.assertIn('scripts/windows_launch.py', windows)
+        self.assertIn('tools/windows_runtime.py', windows)
+        self.assertIn('native/windows-runtime.lock.json', windows)
+        self.assertNotIn('scripts/windows_launch.py', linux)
+        for paths in (linux, windows):
+            for name in ('README.md','LICENSE','.gitignore','.gitattributes','pyproject.toml',
+                         '.github/workflows/release.yml','tests/test_private.py','demo/server.py',
+                         'docs/WINDOWS.md','tools/build_windows.py','native/windows-launcher.cs'):
+                self.assertNotIn(name, paths)
+
+    # ==========================================
+    # Function: Prevent removed files or prior user state from leaking through reused Windows staging.
+    # Method: Build twice with fake private runtimes, seed obsolete files between builds and inspect the real ZIP.
+    # ==========================================
+    def test_windows_rebuild_cleans_staging(self):
+        from tools import build_windows
+        folder = self.root / '.runtime/windows-build/AutoReserve-1.2.3'
+
+        # ==========================================
+        # Function: Supply a minimal private interpreter without downloading or executing Windows artifacts.
+        # Method: Write one marker under the same runtime directory as the production builder.
+        # ==========================================
+        def stage(root, cache):
+            target = root / '.runtime/python/python.exe'
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b'MZ')
+
+        # ==========================================
+        # Function: Supply the native launcher marker at the compiler boundary.
+        # Method: Keep the production copy and ZIP path while avoiding platform compiler dependencies.
+        # ==========================================
+        def compile_launcher(root):
+            (root / 'AutoReserve.exe').write_bytes(b'MZ')
+
+        with patch.object(build_windows,'ROOT',self.root), patch.object(build_windows,'stage',side_effect=stage), \
+             patch.object(build_windows,'compile_launcher',side_effect=compile_launcher):
+            build_windows.build()
+            for name in ('README.md','.github/old.yml','tests/old.py','.auth/session.json','config/config.json'):
+                path = folder / name
+                path.parent.mkdir(parents=True,exist_ok=True)
+                path.write_text('STALE-PRIVATE')
+            archive = build_windows.build()
+        with zipfile.ZipFile(archive) as package:
+            names = {name.removeprefix(folder.name+'/') for name in package.namelist()}
+            self.assertIn('AutoReserve.exe',names)
+            self.assertIn('.runtime/python/python.exe',names)
+            self.assertIn('.runtime/licenses/AutoReserve/LICENSE',names)
+            self.assertIn('scripts/windows_launch.py',names)
+            self.assertFalse(any('STALE-PRIVATE' in package.read(name).decode(errors='ignore') for name in package.namelist()))
+            self.assertNotIn('README.md',names)
+            self.assertFalse((folder/'.github').exists())
 
     # ==========================================
     # Function: Produce reproducible archives and standard checksums.

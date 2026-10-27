@@ -35,4 +35,4 @@ version = {attr = "autoreserve.__version__"}
 include = ["autoreserve*"]
 
 [tool.setuptools.package-data]
-autoreserve = ["gtk_ui/*.ui", "gtk_ui/*.css", "gtk_ui/*.svg", "ui/*.html", "ui/*.css", "ui/*.js"]
+autoreserve = ["gtk_ui/*.ui", "gtk_ui/*.css", "gtk_ui/*.svg", "gtk_ui/*.ico", "ui/*.html", "ui/*.css", "ui/*.js"]

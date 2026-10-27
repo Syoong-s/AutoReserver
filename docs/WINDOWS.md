@@ -12,6 +12,10 @@ AutoReserve's reservation worker and GTK editor now run directly on **Windows 11
 
 The EXE is a Windows GUI application and opens no console. It uses Windows' existing .NET Framework to start the included CPython executable with isolated import paths. The portable folder includes Python 3.14.5, pinned Python wheels and GTK 3.24.52 DLLs/data/licenses. Chromium and its headless shell are downloaded separately on first use into `.runtime/browsers/`. The launcher cannot function alone; if its embedded Python files are removed, extract a fresh complete archive.
 
+The workspace uses the Windows system titlebar for minimize, maximize, restore and taskbar activation. Both the startup EXE and the Python-owned workspace use AutoReserve's calendar icon and explicit application identity. The startup window leaves the taskbar after the workspace is created. Initial workspace dimensions and position follow the primary monitor's work area in GTK application pixels, including display scaling and taskbar space.
+
+Portable archives contain the application, its UI assets and only the bootstrap/runtime files needed for their platform. Repository metadata, README files, developer documentation, tests, demo code and compiler inputs are excluded. The Windows runtime repair manifest remains in `native/`; AutoReserve's license notice is under `.runtime/licenses/AutoReserve/LICENSE`, and third-party notices remain inside their runtime packages.
+
 ## Configuration, recovery and isolation
 
 - Settings stay in the **same program folder's `config/config.json`**, independent of the launch directory. Login and durable order state remain in `.auth/`.
@@ -32,11 +36,17 @@ Use Python 3.14+ on Windows, or WSL with access to the host Windows .NET compile
 python tools/build_windows.py --expected-tag v0.12.0
 ```
 
-The tool uses the same public-source allowlist as the Linux builder, downloads checksum-pinned archives into its private `.runtime/windows-build/downloads`, stages runtime-only DLL/data files and compiles the small C# launcher with the existing .NET Framework compiler. No development environment is installed globally. The result is an independent ZIP under `dist/`. The unpacked staging folder is under `.runtime/windows-build/AutoReserve-0.12.0/`; native Windows execution requires a local Windows drive.
+The tool uses a Windows-specific runtime allowlist, downloads checksum-pinned archives into its private `.runtime/windows-build/downloads`, stages runtime-only DLL/data files and compiles the small C# launcher with the existing .NET Framework compiler. The checked-in multi-size `autoreserve/gtk_ui/icon.ico` exports the existing calendar SVG for Windows and is embedded in the EXE. Every build recreates the unpacked staging folder so files removed from the allowlist cannot survive from an older build. No development environment is installed globally. The result is an independent ZIP under `dist/`. The unpacked staging folder is under `.runtime/windows-build/AutoReserve-0.12.0/`; native Windows execution requires a local Windows drive.
 
 Exact dependency versions, hashes, licenses and upstream/source links are in [the manifest](WINDOWS_DEPENDENCIES.md) and `native/windows-runtime.lock.json`. Vendor archives are verified before extraction; Python wheels are unpacked into private site-packages without a global pip installation. GTK/MSYS2 package installation scripts are never run. Upstream licenses remain with their packages; public source/package URLs are retained for dependency rebuilds.
 
-`AutoReserve.exe --self-test` verifies native GTK settings, folds, rush configuration persistence, sidebar scrolling, local Chromium submission boundaries and a timed-release goal, using temporary configuration and a loopback-only demo website. It writes a JSON report and native screenshot under `.runtime/logs/`; no real account, reservation or payment is involved. The ordinary client starts when no self-test argument is provided.
+`AutoReserve.exe --self-test` works from the portable package without a source checkout. It verifies the actual Win32 titlebar, native taskbar icon, AppUserModelID, three system-minimize/restore cycles, visible monitor placement, account locking and a local headless Chromium page. It writes a JSON report and native screenshot under `.runtime/logs/`; no real account, reservation or payment is involved. The ordinary client starts when no self-test argument is provided.
+
+CI additionally passes `--self-test --test-source SOURCE_DIRECTORY` to load settings, folds, rush persistence, sidebar and loopback booking regressions from its separate checkout. Tests and the demo server are never bundled in the portable application.
+
+Local verification uses Python 3.14.4 for WSL packaging, the existing Python 3.12.13 with tkinter for full Linux regressions, and the bundled Python 3.14.5 / GTK 3.24.52 on Windows. Existing dependencies are reused. For Linux regression tests, prepare the application environment with `scripts.bootstrap.environment()` before running `python -m unittest discover -s tests -v`; enable `RUN_GTK_TESTS=1`, `RUN_NATIVE_TESTS=1` and `RUN_BROWSER_TESTS=1` for native and local browser checks. The portable archive checks also run separately with `python -m unittest discover -s tests -p test_release.py -v`.
+
+The 2026-10-27 local validation ran 202 current application/GTK/browser/release checks successfully with Python 3.14.4. The 34 legacy Tk/startup checks ran separately with Python 3.12.13: 33 passed initially, and one event-timing assertion passed on an isolated retry. Windows verification passed the portable EXE self-test, seven source-checkout integration cases and an additional `GDK_SCALE=2` window test. Both Linux portable formats and the Windows ZIP were built; archive membership, ZIP integrity and the delivered Windows ZIP's SHA256 were checked. A local Python wheel rebuild was unavailable because the existing interpreters have no setuptools/build frontend installed; the hosted workflow still builds the wheel in its configured build environment.
 
 GitHub Actions has a native Windows build/EXE test job in addition to Linux's full regressions. A matching version tag publishes the Windows ZIP together with Linux and Python artifacts only after both jobs pass. A manual run produces downloadable artifacts without publishing. Hosted Actions and GitHub Release publication require pushing the repository and are not executed by a local build.
 
@@ -46,3 +56,5 @@ GitHub Actions has a native Windows build/EXE test job in addition to Linux's fu
 - [CPython's embedded Windows distribution](https://docs.python.org/3/using/windows.html#the-embeddable-package)
 - [Python zoneinfo data sources and Windows tzdata](https://docs.python.org/3/library/zoneinfo.html#data-sources)
 - [Microsoft DLL search order](https://learn.microsoft.com/en-us/windows/win32/dlls/dynamic-link-library-search-order)
+- [Microsoft explicit application taskbar identity](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-setcurrentprocessexplicitappusermodelid)
+- [GTK titlebar selection](https://docs.gtk.org/gtk3/method.Window.set_titlebar.html) and [GDK monitor work areas](https://docs.gtk.org/gdk3/method.Monitor.get_workarea.html)

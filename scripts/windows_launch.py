@@ -20,12 +20,17 @@ def main():
         return 0
     from scripts.bootstrap_windows import WindowsBootstrap
     from autoreserve.filelock import acquire, release
-    from scripts.windows_smoke import self_test
     try:
         setup = WindowsBootstrap(root, lambda message: print('SETUP:' + message, flush=True))
         os.environ.update(setup.ensure())
         if sys.argv[1:2] == ['--self-test']:
-            self_test(root)
+            from scripts.windows_smoke import self_test
+            test_source = None
+            if len(sys.argv) > 2:
+                if len(sys.argv) != 4 or sys.argv[2] != '--test-source':
+                    raise ValueError('Usage: --self-test [--test-source SOURCE_DIRECTORY]')
+                test_source = Path(sys.argv[3]).resolve()
+            self_test(root, test_source)
             print('AUTORESERVE_READY', flush=True)
             return 0
         with (root / '.runtime/desktop.lock').open('a+b') as handle:
@@ -34,7 +39,6 @@ def main():
             except BlockingIOError as error:
                 raise RuntimeError('此程序文件夹已有客户端运行，请先切换到已打开的窗口。') from error
             try:
-                print('AUTORESERVE_READY', flush=True)
                 sys.argv = ['autoreserve', *sys.argv[1:]]
                 runpy.run_module('autoreserve', run_name='__main__')
             finally:

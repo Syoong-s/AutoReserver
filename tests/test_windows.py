@@ -12,6 +12,7 @@ import zipfile
 
 from autoreserve.filelock import acquire, release
 from autoreserve.native_runtime import library_path
+from autoreserve.gtk_native import GtkNative
 from scripts.bootstrap_windows import WindowsBootstrap, atomic_json, environment, read_json, browser_available
 from tools.windows_runtime import manifest, safe_member, stage_zip, gtk_payload, verified
 
@@ -21,6 +22,38 @@ from tools.windows_runtime import manifest, safe_member, stage_zip, gtk_payload,
 # Method: Use temporary files plus strict mocks only at Windows CRT and subprocess boundaries.
 # ==========================================
 class WindowsTests(unittest.TestCase):
+    # ==========================================
+    # Function: Keep startup geometry within scaled or offset Windows monitor work areas.
+    # Method: Feed GDK application-pixel rectangles into the real pre-map configuration and inspect bounds.
+    # ==========================================
+    def test_window_geometry_fits_scaled_and_offset_monitors(self):
+        for x, y, width, height in ((0,0,1920,1040),(0,0,1280,680),(-1280,40,1280,680),(0,0,800,560)):
+            g = Mock()
+            g.gtk_window_set_icon_from_file.return_value = True
+
+            # ==========================================
+            # Function: Supply one monitor work area at the native GDK boundary.
+            # Method: Fill the ctypes output structure without depending on a desktop session.
+            # ==========================================
+            def workarea(monitor, output):
+                output._obj.x, output._obj.y = x,y
+                output._obj.width, output._obj.height = width,height
+
+            g.gdk_monitor_get_workarea.side_effect = workarea
+            with self.subTest(workarea=(x,y,width,height)), patch('autoreserve.gtk_native.sys.platform','win32'):
+                GtkNative.configure_desktop_window(g, 123)
+                _, actual_width, actual_height = g.gtk_window_set_default_size.call_args.args
+                _, left, top = g.gtk_window_move.call_args.args
+                self.assertGreaterEqual(left,x)
+                self.assertGreaterEqual(top,y)
+                self.assertLessEqual(left+actual_width,x+width)
+                self.assertLessEqual(top+actual_height,y+height)
+                _, minimum_width, minimum_height = g.gtk_widget_set_size_request.call_args.args
+                self.assertLessEqual(minimum_width,actual_width)
+                self.assertLessEqual(minimum_height,actual_height)
+                g.gtk_window_set_titlebar.assert_called_once_with(123,None)
+                g.gtk_window_set_icon_from_file.assert_called_once()
+
     # ==========================================
     # Function: Isolate native setup metadata, executable markers and user settings for each regression.
     # Method: Provide the real public lock manifest in a temporary portable folder.

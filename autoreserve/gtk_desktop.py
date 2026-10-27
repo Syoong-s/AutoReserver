@@ -7,6 +7,7 @@ import hashlib
 from pathlib import Path
 import queue
 import signal
+import sys
 import threading
 import time
 
@@ -58,6 +59,7 @@ class GtkDesktop:
                'run_badge','inventory','inventory_scope','inventory_scroll','status']
         self.w = {name:g.object(self.builder,name) for name in ids}
         self.window = self.w['window']
+        g.configure_desktop_window(self.window)
         if application:
             g.gtk_window_set_application(self.window,application)
         g.css(ASSETS/'style.css')
@@ -1364,7 +1366,7 @@ class GtkDesktop:
 
 # ==========================================
 # Function: Launch the GTK client through the same Linux native architecture as TeleMail.
-# Method: Use GtkApplication activation, CSD before mapping, and the existing browser controller.
+# Method: Use GtkApplication activation, platform decorations before mapping, and the existing browser controller.
 # ==========================================
 def serve_gtk(config_path, auth_dir):
     from . import __version__
@@ -1393,6 +1395,8 @@ def serve_gtk(config_path, auth_dir):
             app=GtkDesktop(DesktopController(config_path,auth_dir),g,application)
             holder['app']=app
             g.gtk_window_present(app.window)
+            if sys.platform == 'win32':
+                print('AUTORESERVE_READY',flush=True)
             print('客户端窗口已创建并映射：AutoReserve · GTK 3',flush=True)
         except Exception as exc:
             holder['error']=str(exc)

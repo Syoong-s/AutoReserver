@@ -1,6 +1,6 @@
 include README.md README-CN.md LICENSE requirements.txt pyproject.toml MANIFEST.in
 include run.sh start-gui.sh test.sh .gitignore .gitattributes
-recursive-include autoreserve *.py *.ui *.css *.svg *.js *.html
+recursive-include autoreserve *.py *.ui *.css *.svg *.ico *.js *.html
 recursive-include native *.c *.cs *.json *.manifest
 recursive-include scripts *.py
 recursive-include tools *.py

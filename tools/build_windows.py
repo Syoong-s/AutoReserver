@@ -38,24 +38,27 @@ def compile_launcher(root):
     source = host_path(ROOT / 'native/windows-launcher.cs').replace("'", "''")
     target = host_path(root / 'AutoReserve.exe').replace("'", "''")
     manifest = host_path(ROOT / 'native/windows.manifest').replace("'", "''")
+    icon = host_path(ROOT / 'autoreserve/gtk_ui/icon.ico').replace("'", "''")
     command = ("$ErrorActionPreference='Stop'; $p=New-Object System.CodeDom.Compiler.CompilerParameters;"
                "$p.GenerateExecutable=$true;$p.GenerateInMemory=$false;"
                "$p.OutputAssembly='" + target + "';"
                "$p.ReferencedAssemblies.AddRange(@('System.dll','System.Core.dll','System.Drawing.dll','System.Windows.Forms.dll'));"
-               "$p.CompilerOptions='/target:winexe /platform:x64 /optimize+ /win32manifest:\"" + manifest + "\"';"
+               "$p.CompilerOptions='/target:winexe /platform:x64 /optimize+ /win32manifest:\"" + manifest +
+               "\" /win32icon:\"" + icon + "\"';"
                "$provider=New-Object Microsoft.CSharp.CSharpCodeProvider;"
                "$r=$provider.CompileAssemblyFromSource($p,[IO.File]::ReadAllText('" + source + "',[Text.Encoding]::UTF8));"
                "if($r.Errors.HasErrors){$r.Errors|ForEach-Object{[Console]::Error.WriteLine($_.ToString())};exit 1};")
     encoded = base64.b64encode(command.encode('utf-16-le')).decode('ascii')
     (root / 'AutoReserve.exe').unlink(missing_ok=True)
-    subprocess.run([str(shell), '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], check=True, timeout=60)
+    subprocess.run([str(shell), '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+                    '-EncodedCommand', encoded], check=True, timeout=60)
     if (root / 'AutoReserve.exe').read_bytes()[:2] != b'MZ':
         raise RuntimeError('Windows launcher compiler did not produce a PE executable')
 
 
 # ==========================================
-# Function: Build an independent Windows folder containing source, embedded Python, wheels, GTK and a mouse launcher.
-# Method: Copy the existing public source allowlist, stage pinned runtime components and omit private/cache/compiler files.
+# Function: Build an independent Windows folder containing only the application and its private runtimes.
+# Method: Recreate staging so removed files cannot leak from an earlier build, then copy the Windows runtime allowlist.
 # ==========================================
 def build(output=None, expected_tag=None):
     release = version(ROOT)
@@ -64,20 +67,25 @@ def build(output=None, expected_tag=None):
     output = Path(output or ROOT / 'dist').resolve()
     output.mkdir(parents=True, exist_ok=True)
     folder = ROOT / '.runtime/windows-build' / ('AutoReserve-' + release)
+    if folder.exists():
+        shutil.rmtree(folder)
     folder.mkdir(parents=True, exist_ok=True)
-    for relative, source in public_files(ROOT):
+    for relative, source in public_files(ROOT, target='windows'):
         destination = folder / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
     stage(folder, ROOT / '.runtime/windows-build/downloads')
     compile_launcher(folder)
+    notices = folder / '.runtime/licenses/AutoReserve'
+    notices.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(ROOT / 'LICENSE', notices / 'LICENSE')
     archive = output / ('AutoReserve-' + release + '-windows-x86_64-portable.zip')
     with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=6) as package:
         for path in sorted(folder.rglob('*')):
             if not path.is_file():
                 continue
             relative = path.relative_to(folder)
-            if relative.parts[0] == '.runtime' and relative.parts[1] not in {'python', 'site-packages', 'gtk'}:
+            if relative.parts[0] == '.runtime' and relative.parts[1] not in {'python', 'site-packages', 'gtk', 'licenses'}:
                 continue
             if '__pycache__' in relative.parts or path.suffix in {'.pyc', '.pyo', '.log', '.sqlite3'}:
                 continue

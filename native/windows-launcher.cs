@@ -3,6 +3,7 @@ using System;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows.Forms;
 
@@ -11,6 +12,8 @@ using System.Windows.Forms;
 // Method: Use direct argument quoting, asynchronous UTF-8 pipes and a responsive native Windows message loop.
 // ==========================================
 internal sealed class Launcher : Form {
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    private static extern int SetCurrentProcessExplicitAppUserModelID(string appID);
     private readonly string root;
     private readonly string[] arguments;
     private readonly bool quiet;
@@ -29,6 +32,7 @@ internal sealed class Launcher : Form {
         root = folder; arguments = args;
         quiet = args.Length > 0 && (args[0] == "--self-test" || args[0] == "--version");
         Text = "AutoReserve";
+        Icon = Icon.ExtractAssociatedIcon(Path.Combine(root, "AutoReserve.exe"));
         ClientSize = new Size(520, 150);
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -86,7 +90,7 @@ internal sealed class Launcher : Form {
         if (data.Data == null) return;
         lock (log) { log.WriteLine(data.Data); log.Flush(); }
         Dispatch(delegate {
-            if (data.Data == "AUTORESERVE_READY") { ready = true; Hide(); }
+            if (data.Data == "AUTORESERVE_READY") { ready = true; ShowInTaskbar = false; Hide(); }
             else if (data.Data.StartsWith("SETUP:")) status.Text = data.Data.Substring(6);
         });
     }
@@ -142,6 +146,7 @@ internal sealed class Launcher : Form {
     // ==========================================
     [STAThread]
     private static int Main(string[] args) {
+        SetCurrentProcessExplicitAppUserModelID("org.autoreserve.Desktop");
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
         using (var app = new Launcher(AppDomain.CurrentDomain.BaseDirectory, args)) {

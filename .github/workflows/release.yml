@@ -82,10 +82,11 @@ jobs:
           import json, subprocess
           from autoreserve import __version__
           root = Path('.runtime/windows-build') / ('AutoReserve-' + __version__)
-          result = subprocess.run([str((root/'AutoReserve.exe').resolve()), '--self-test'], timeout=900)
+          result = subprocess.run([str((root/'AutoReserve.exe').resolve()), '--self-test', '--test-source', str(Path.cwd())], timeout=900)
           assert result.returncode == 0, (root/'.runtime/logs/windows-launch.log').read_text(encoding='utf-8')
           report = json.loads((root/'.runtime/logs/windows-smoke.json').read_text(encoding='utf-8'))
           assert report['status'] == 'passed' and report['platform'] == 'win32'
+          assert report['window']['minimize_restore_cycles'] == 3 and report['window']['inside_workarea']
           '@ | python -
       - name: Upload Windows portable package
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
