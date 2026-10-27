@@ -24,7 +24,7 @@ Portable archives contain the application, its UI assets and only the bootstrap/
 - All temporary files, image loader caches, font caches and browser files stay in `.runtime/`. DLL search directories and PATH changes affect only this process and its children.
 - Fontconfig reads Windows' installed fonts, including the Chinese fonts normally available on Windows 11. Moving the program folder rebuilds font and image-loader paths locally.
 - Windows account/desktop/setup locks use one persistent byte via the CRT; Linux retains POSIX flock. Use a separate extracted native Windows folder rather than sharing an active WSL workspace or account folder.
-- The existing default price limit, verification flow, timed-release bounds, Retry-After backoff, order deduplication and no-payment behavior are unchanged.
+- A zero monitoring duration means no time limit, and a zero price cap means no monetary ceiling. Positive limits, exact selection/amount checks, timed-release bounds, Retry-After backoff, order deduplication and no-payment behavior remain enforced.
 
 Startup logs are `.runtime/logs/windows-launch.log` and `windows-setup.log`. If downloads are blocked, these logs identify the failing stage. No automatic task, registry registration or system service is created. The launcher is unsigned; Windows security reputation policies may display their usual prompt.
 

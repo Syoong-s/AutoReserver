@@ -25,7 +25,9 @@ AutoReserve combines a GTK 3 desktop with a local Playwright booking worker. Cre
 - An inline **+** action that copies a goal to the following date with an independent identity.
 - Per-goal weekday selection, trigger time, relative booking date, and pause control.
 - Per-goal timed-release mode: early session checks, same-origin clock estimation, prewarmed venue pages, and a shared, bounded first-second refresh window.
-- Three independently collapsible editor modules: repeat settings, timed-release settings, and booking requirements, with an always-visible rush switch.
+- Collapsible automation and booking sections, a taller ranked alternative list, and a compact floating venue/time composer that retains unfinished selections.
+- Right-panel font controls (11–20 px), remembered independently of booking settings; the execution log follows its latest 50 lines.
+- Monitoring duration defaults to zero for no time limit. A zero order-price cap also means unlimited; positive caps, amount recognition and exact selection checks still apply.
 - Visible sidebar surfaces and left accents: green for monitoring, blue for repeat goals, gray for planned goals, purple for completed goals, and amber for attention.
 - Separate, always-visible execution-log and availability panels below the editor.
 - Shared request pacing and backoff across venues; persistent order/slot protection across restarts.

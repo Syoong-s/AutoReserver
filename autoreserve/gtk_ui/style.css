@@ -41,8 +41,8 @@ scrollbar trough { background: transparent; }
 .goal-list row:selected { background: #e5ecfa; border-color: #d5e1f8; color: #1d4ed8; }
 .goal-list row:selected .caption { color: #5c7ab0; }
 .goal-name { font-size: 12px; font-weight: 500; }
-.editor-card { background: #fff; border: 1px solid #e2e6ed; border-radius: 12px; padding: 20px; }
-.editor-card.recurring { border: 2px solid #4c83eb; padding: 19px; }
+.editor-card { background: #fff; border: 1px solid #e2e6ed; border-radius: 12px; padding: 16px; }
+.editor-card.recurring { border: 2px solid #4c83eb; padding: 15px; }
 .mode { font-size: 11px; font-weight: 600; color: #7b8594; }
 .editor-card.recurring .mode { color: #3476ec; }
 .repeat-panel { background: #f0f5ff; border-radius: 9px; padding: 13px; }
@@ -50,6 +50,10 @@ button.day { background: #fff; color: #8b93a1; border-color: #e0e7f4; padding: 6
 button.day:checked { background: #3476ec; border-color: #3476ec; color: #fff; }
 .candidate-list row { padding: 9px 11px; border-radius: 7px; margin: 2px 0; }
 .candidate-list row:selected { background: #eaf1ff; color: #2759a7; }
+popover.candidate-composer { background: #fff; border: 1px solid #dfe3ea; border-radius: 14px; box-shadow: 0 12px 32px alpha(#202530,0.18); padding: 4px; }
+.composer-shell { padding: 18px; }
+.candidate-composer .workbench-section { border: none; padding: 4px 0; }
+.candidate-composer .venue-chip { background: #f0f4fb; }
 flowbox flowboxchild { padding: 0; background: transparent; border-radius: 8px; }
 button.choice { background: #f7f8fa; border-color: #e5e8ef; padding: 8px 9px; font-size: 12px; }
 button.choice:checked { background: #eaf2ff; color: #1f61ce; border-color: #80a8ed; font-weight: 600; }
@@ -82,7 +86,7 @@ separator { background: #e7eaf0; min-height: 1px; }
 .legend-running { color: #238658; font-size: 10px; }
 .legend-recurring { color: #3476ec; font-size: 10px; }
 .legend-planned { color: #8593aa; font-size: 10px; }
-.workbench-section { border-top: 1px solid #e8ebf0; padding-top: 9px; }
-.workbench-section > title { padding: 9px 4px; color: #354155; }
+.workbench-section { border-top: 1px solid #e8ebf0; padding-top: 0; }
+.workbench-section > title { padding: 6px 4px; color: #354155; }
 .workbench-section > title > label { font-weight: 600; }
 .workbench-section.rush-enabled > title { color: #a06112; background: #fff5e6; border-radius: 7px; }

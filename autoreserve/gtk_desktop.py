@@ -4,6 +4,7 @@ import ctypes as C
 from dataclasses import asdict
 from datetime import datetime, timedelta
 import hashlib
+import json
 from pathlib import Path
 import queue
 import signal
@@ -16,6 +17,7 @@ from .config import load_config, config_from_dict
 from .desktop_controller import DesktopController, context_key
 from .gtk_native import GtkNative, P, I
 from .workspace import Workspace
+from .state import private_json
 from .paths import prepare_config
 from .config import RushSettings
 from zoneinfo import ZoneInfo
@@ -48,6 +50,8 @@ class GtkDesktop:
         self.edit_controls, self.sidebar_rows = [], {}
         self.court_buttons, self.hour_buttons = {}, {}
         self.logs, self.snapshot = [], None
+        self.monitor_started, self._inventory_signature = False, None
+        self.font_provider = None
         self._sidebar_order, self._court_scope, self._busy = None, None, None
         self._sidebar_captions, self._row_tones = {}, {}
         self._folds, self._rush_status_text = {}, None
@@ -64,6 +68,7 @@ class GtkDesktop:
             g.gtk_window_set_application(self.window,application)
         g.css(ASSETS/'style.css')
         self.build_editor()
+        self.build_display_controls()
         self.bind_actions()
         self.model.states = {s['id']:s for s in controller.state()['goals']}
         legend=self.box(spacing=10)
@@ -200,10 +205,11 @@ class GtkDesktop:
         self.pack(top,self.rush_switch)
         g.gtk_widget_set_valign(self.rush_switch,3)
         self.edit_controls.append(self.rush_switch)
-        self.repeat_expander,repeat_body=self.section(card,'重复功能设置','repeat',False)
+        self.automation_expander,self.automation_body=self.section(card,'自动执行 · 重复与抢购','automation',False)
+        self.repeat_expander,repeat_body=self.section(self.automation_body,'重复功能设置','repeat',False)
         self.repeat_button=self.pack(repeat_body,self.button('设为每周重复',self.toggle_repeat,editable=True))
         self.pack(repeat_body,self.label('选定每周执行日；开启抢购后将提前生成并准备。','caption',wrap=True))
-        self.rush_expander,rush_body=self.section(card,'抢购功能设置','rush',False)
+        self.rush_expander,rush_body=self.section(self.automation_body,'抢购功能设置','rush',False)
         self.build_rush(rush_body)
         self.target_expander,card=self.section(card,'目标设定','target',True)
         meta=self.box(spacing=14)
@@ -250,23 +256,39 @@ class GtkDesktop:
         g.connect(self.repeat_switch,'notify::active',lambda *_:self.guard(self.commit_schedule),count=3)
         heading=self.pack(card,self.box())
         self.pack(heading,self.label('场馆备选','section-title'),True)
-        self.pack(heading,self.label('任意一个下单即完成','caption'))
+        self.add_button=self.pack(heading,self.button('＋ 添加场馆与时段',self.open_builder,'secondary',True))
         self.pack(heading,self.button('↑',lambda:self.move_candidate(-1),'icon',True))
         self.pack(heading,self.button('↓',lambda:self.move_candidate(1),'icon',True))
         self.pack(heading,self.button('移除',self.delete_candidate,'icon',True))
         self.candidate_list=g.gtk_list_box_new()
         g.gtk_list_box_set_selection_mode(self.candidate_list,1)
         g.style(self.candidate_list,'candidate-list')
-        self.candidate_scroll=self.pack(card,self.scroller(self.candidate_list,88))
-        builder_heading=self.pack(card,self.box())
+        self.pack(card,self.label('从上到下依次尝试，任意一个下单即完成当前目标。','caption'))
+        self.candidate_scroll=self.pack(card,self.scroller(self.candidate_list,248))
+        self.builder_popover=g.gtk_popover_new(self.add_button)
+        g.gtk_popover_set_position(self.builder_popover,3)
+        g.gtk_popover_set_transitions_enabled(self.builder_popover,False)
+        g.style(self.builder_popover,'candidate-composer')
+        self.builder_shell=self.box(True,14,'composer-shell')
+        g.gtk_widget_set_size_request(self.builder_shell,600,-1)
+        g.gtk_container_add(self.builder_popover,self.builder_shell)
+        builder_heading=self.pack(self.builder_shell,self.box())
         self.pack(builder_heading,self.label('添加场馆与时段','section-title'),True)
-        self.catalog_hint=self.pack(builder_heading,self.label('场馆目录保存在本机','caption'))
+        self.pack(builder_heading,self.button('×',lambda:g.gtk_popover_popdown(self.builder_popover),'icon'))
+        self.catalog_hint=self.pack(self.builder_shell,self.label('场馆目录保存在本机','caption',wrap=True))
+        self.builder_body=self.box(True,14)
+        self.builder_scroll=self.pack(self.builder_shell,self.scroller(self.builder_body,280),True)
+        g.gtk_scrolled_window_set_min_content_height(self.builder_scroll,240)
+        g.gtk_scrolled_window_set_max_content_height(self.builder_scroll,420)
+        g.gtk_scrolled_window_set_propagate_natural_height(self.builder_scroll,True)
+        self.venue_expander,card=self.section(self.builder_body,'场馆与项目','builder-venue',True)
         context=self.pack(card,self.box())
         self.venue_combo,self.sport_combo=g.gtk_combo_box_text_new(),g.gtk_combo_box_text_new()
         self.pack(context,self.venue_combo,True)
         self.pack(context,self.sport_combo,True)
         self.pack(context,self.button('＋ 加入场馆',self.add_venue,editable=True))
         self.venue_flow=self.pack(card,self.flow(1,3))
+        self.choices_expander,card=self.section(self.builder_body,'场地与时段','builder-choices',True)
         choices=self.pack(card,self.box(spacing=16))
         courts,slots=self.box(True,8),self.box(True,8)
         self.pack(choices,courts,True)
@@ -274,20 +296,83 @@ class GtkDesktop:
         self.pack(courts,self.label('具体场地 · 可多选','caption'))
         self.pack(slots,self.label('预约时段 · 可多选','caption'))
         self.court_flow,self.hour_flow=self.flow(1,2),self.flow(2,2)
-        self.court_scroll=self.pack(courts,self.scroller(self.court_flow,118))
-        self.hour_scroll=self.pack(slots,self.scroller(self.hour_flow,118))
+        self.court_scroll=self.pack(courts,self.scroller(self.court_flow,180))
+        self.hour_scroll=self.pack(slots,self.scroller(self.hour_flow,180))
         self.build_choices(self.hour_flow,HOURS,self.hour_buttons,{'14:00-15:00'},False)
-        self.selection_hint=self.pack(card,self.label('', 'caption',wrap=True))
-        addbar=self.pack(card,self.box())
+        self.selection_hint=self.pack(self.builder_shell,self.label('', 'caption',wrap=True))
+        addbar=self.pack(self.builder_shell,self.box())
         self.bundle=g.gtk_check_button_new_with_label('连续时段合并下单'.encode())
         self.pack(addbar,self.bundle,True)
-        self.pack(addbar,self.button('添加到当前目标  ＋',self.add_candidates,'primary',True))
+        self.pack(addbar,self.button('添加备选  →',self.add_candidates,'primary',True))
         for widget in [self.venue_combo,self.sport_combo,self.repeat_switch,self.repeat_at,self.repeat_ahead,self.bundle,*self.week_buttons]:
             self.edit_controls.append(widget)
         g.connect(self.name_entry,'changed',lambda *_:self.metadata_changed())
         g.connect(self.date_entry,'changed',lambda *_:self.metadata_changed())
         g.connect(self.venue_combo,'changed',lambda *_:self.venue_changed())
         g.connect(self.sport_combo,'changed',lambda *_:self.refresh_courts())
+
+    # ==========================================
+    # Function: Open a compact anchored candidate composer without discarding unfinished selections.
+    # Method: Keep its native controls alive between dismissals and constrain scrolling to the visible window height.
+    # ==========================================
+    def open_builder(self):
+        self.editing()
+        self.model.editable()
+        g=self.g
+        height=max(200,min(420,g.gtk_widget_get_allocated_height(self.window)-300))
+        g.gtk_widget_set_size_request(self.builder_scroll,-1,min(280,height))
+        g.gtk_scrolled_window_set_min_content_height(self.builder_scroll,0)
+        g.gtk_scrolled_window_set_max_content_height(self.builder_scroll,height)
+        g.gtk_scrolled_window_set_min_content_height(self.builder_scroll,min(240,height))
+        g.gtk_widget_show_all(self.builder_popover)
+        g.gtk_popover_popup(self.builder_popover)
+        g.later(25,self.reveal_selected_hours)
+
+    # ==========================================
+    # Function: Expose persistent right-panel font controls independently of booking settings.
+    # Method: Load one small presentation-only preference file and scope CSS to this workspace and its composer.
+    # ==========================================
+    def build_display_controls(self):
+        g=self.g
+        self.ui_path=self.controller.config_path.parent/'desktop-ui.json'
+        try:
+            value=json.loads(self.ui_path.read_text(encoding='utf-8')).get('font_size',13)
+        except (OSError,ValueError,AttributeError):
+            value=13
+        self.font_size=value if type(value) is int and 11<=value<=20 else 13
+        self.font_scope='workbench-'+format(self.window,'x')
+        for widget in (self.w['main'],self.builder_popover):
+            g.style(widget,self.font_scope)
+        toolbar=self.box(spacing=5)
+        self.pack(toolbar,self.label('目标详情 · 备选按优先级执行','caption'),True)
+        self.pack(toolbar,self.label('字号','caption'))
+        self.font_down=self.pack(toolbar,self.button('A−',lambda:self.set_font_size(self.font_size-1),'icon'))
+        self.font_label=self.pack(toolbar,self.label('','caption'))
+        self.font_up=self.pack(toolbar,self.button('A＋',lambda:self.set_font_size(self.font_size+1),'icon'))
+        self.pack(self.w['main'],toolbar)
+        reorder=g.libs['gtk'].gtk_box_reorder_child
+        reorder.argtypes,reorder.restype=[P,P,I],None
+        reorder(self.w['main'],toolbar,1)
+        self.set_font_size(self.font_size,persist=False)
+
+    # ==========================================
+    # Function: Resize right-panel typography without altering goals or interrupting monitoring.
+    # Method: Replace scoped CSS in place, keep readable heading/caption proportions and persist only the view preference.
+    # ==========================================
+    def set_font_size(self, value, persist=True):
+        g=self.g
+        self.font_size=max(11,min(20,int(value)))
+        scope='.'+self.font_scope
+        rules=[f'{scope}, {scope} * {{ font-size: {self.font_size}px; }}']
+        for name,offset in [('caption',-2),('muted',-1),('page-title',10),('section-title',1),
+                            ('mode',-2),('badge',-2),('choice',-1),('inventory-cell',-2),('log-text',-2)]:
+            rules.append(f'{scope} .{name}, {scope} .{name} * {{ font-size: {max(10,self.font_size+offset)}px; }}')
+        self.font_provider=g.css_text('\n'.join(rules),self.font_provider)
+        g.label(self.font_label,f'{self.font_size} px')
+        g.gtk_widget_set_sensitive(self.font_down,self.font_size>11)
+        g.gtk_widget_set_sensitive(self.font_up,self.font_size<20)
+        if persist:
+            private_json(self.ui_path,{'font_size':self.font_size})
 
     # ==========================================
     # Function: Build one independently collapsible native workbench module.
@@ -365,6 +450,7 @@ class GtkDesktop:
                          'sync_clock':bool(self.g.gtk_toggle_button_get_active(self.rush_sync)),
                          'manual_offset_ms':self.g.gtk_spin_button_get_value_as_int(self.rush_offset)})
         if enabled and not was_enabled:
+            self.g.gtk_expander_set_expanded(self.automation_expander,True)
             self.g.gtk_expander_set_expanded(self.rush_expander,True)
         self.render_schedule()
         self.render_rush()
@@ -686,6 +772,7 @@ class GtkDesktop:
         self.render_candidates()
         self.render_drafts()
         self.render_sidebar()
+        self.g.gtk_popover_popdown(self.builder_popover)
 
     # ==========================================
     # Function: Update sidebar rows without resetting scroll position on status events.
@@ -844,7 +931,10 @@ class GtkDesktop:
             g.gtk_spin_button_set_value(widget,rush[key])
         g.label(self.rush_time_caption,'执行日抢购时刻 · HH:MM:SS' if repeating else '抢购时刻 · YYYY-MM-DD HH:MM:SS（北京时间）')
         folds=self._folds.setdefault(self.model.selected,{})
-        for key,widget,default in [('repeat',self.repeat_expander,repeating),('rush',self.rush_expander,rush['enabled']),('target',self.target_expander,True)]:
+        for key,widget,default in [('repeat',self.repeat_expander,repeating),('rush',self.rush_expander,rush['enabled']),
+                                   ('automation',self.automation_expander,repeating or rush['enabled']),
+                                   ('target',self.target_expander,True),('builder-venue',self.venue_expander,True),
+                                   ('builder-choices',self.choices_expander,True)]:
             g.gtk_expander_set_expanded(widget,folds.get(key,default))
         self.loading=False
         self.render_schedule()
@@ -898,10 +988,10 @@ class GtkDesktop:
             g.gtk_container_add(self.candidate_list,row)
         if not candidates:
             row=g.gtk_list_box_row_new()
-            g.gtk_container_add(row,self.label('选择下方场馆和时段，添加第一个备选','muted'))
+            g.gtk_container_add(row,self.label('点击“添加场馆与时段”，创建第一个备选','muted'))
             g.gtk_container_add(self.candidate_list,row)
         g.gtk_widget_show_all(self.candidate_list)
-        g.gtk_widget_set_size_request(self.candidate_scroll,-1,65 if len(candidates)<=1 else 124)
+        g.gtk_widget_set_size_request(self.candidate_scroll,-1,248)
 
     # ==========================================
     # Function: Create another independent one-time target.
@@ -997,6 +1087,7 @@ class GtkDesktop:
         if signature==self._busy:
             return
         self._busy=signature
+        self.render_inventory(self.snapshot)
         editable=not busy and not recorded and self.model.get() is not None
         for widget in self.edit_controls:
             g.gtk_widget_set_sensitive(widget,editable)
@@ -1030,6 +1121,9 @@ class GtkDesktop:
     # ==========================================
     def action(self, operation):
         self.controller.start(operation)
+        if operation=='run':
+            self.monitor_started=True
+            self.render_inventory(None)
         self.set_busy()
 
     # ==========================================
@@ -1096,10 +1190,10 @@ class GtkDesktop:
         self.pack(body,self.label('所有目标共用执行参数，重复星期在各自工作台中设置。','muted',wrap=True))
         specs=[('普通目标启动时间 · 北京时间，留空立即','start_at'),('全局读取间隔 / 秒','poll_interval_seconds'),
                ('额外随机延迟 / %','poll_jitter_ratio'),('异常退避上限 / 秒','backoff_max_seconds'),
-               ('单个订单金额上限 / 元','max_total_price'),('普通模式监测时长 / 秒','max_poll_seconds')]
+               ('单个订单金额上限 / 元 · 0 为无上限','max_total_price'),('普通模式监测时长 / 秒 · 0 为无上限','max_poll_seconds')]
         for caption,key in specs:
             value=self.model.data[key]
-            value=value*100 if key=='poll_jitter_ratio' else value or ''
+            value=value*100 if key=='poll_jitter_ratio' else value if value is not None else ''
             control=self.entry(value,width=18)
             self.settings_fields[key]=control
             row=self.pack(body,self.box(spacing=20))
@@ -1146,41 +1240,51 @@ class GtkDesktop:
 
     # ==========================================
     # Function: Display recent logs continuously in the fixed execution-record card.
-    # Method: Bound the text and preserve manual scroll position unless already following the bottom.
+    # Method: Keep exactly the latest fifty logical lines and always follow the newest line after native layout.
     # ==========================================
     def render_logs(self):
         g=self.g
         adjustment=g.gtk_scrolled_window_get_vadjustment(self.w['log_scroll'])
-        position=g.gtk_adjustment_get_value(adjustment)
-        following=position+g.gtk_adjustment_get_page_size(adjustment)>=g.gtk_adjustment_get_upper(adjustment)-18
-        text='\n'.join(self.logs[-250:])
-        g.gtk_text_buffer_set_text(g.gtk_text_view_get_buffer(self.w['logs']),text.encode(),-1)
-        self.logs=self.logs[-250:]
+        self.logs='\n'.join(self.logs).splitlines()[-50:]
+        buffer=g.gtk_text_view_get_buffer(self.w['logs'])
+        g.gtk_text_buffer_set_text(buffer,'\n'.join(self.logs).encode(),-1)
+        end=(C.c_void_p*16)()
+        g.gtk_text_buffer_get_end_iter(buffer,C.byref(end))
+        g.gtk_text_buffer_place_cursor(buffer,C.byref(end))
+        mark=g.gtk_text_buffer_get_insert(buffer)
+        g.gtk_text_view_scroll_to_mark(self.w['logs'],mark,0,True,0,1)
 
         # ==========================================
-        # Function: Restore log scroll position after GTK finishes measuring the new text.
-        # Method: Follow new messages only when the user was already at the bottom.
+        # Function: Settle the newest line at the bottom after GTK finishes measuring the text.
+        # Method: Use a persistent text mark and clamp the native adjustment after layout.
         # ==========================================
         def settle():
             if not self.destroyed:
                 maximum=g.gtk_adjustment_get_upper(adjustment)-g.gtk_adjustment_get_page_size(adjustment)
-                g.gtk_adjustment_set_value(adjustment,maximum if following else position)
+                g.gtk_text_view_scroll_to_mark(self.w['logs'],mark,0,True,0,1)
+                g.gtk_adjustment_set_value(adjustment,max(0,maximum))
 
-        g.later(1,settle)
+        g.later(25,settle)
 
     # ==========================================
     # Function: Keep live availability visible in a separate fixed native card.
     # Method: Repaint only changed in-memory snapshots; never request availability from UI rendering.
     # ==========================================
     def render_inventory(self, shot):
-        if shot==self.snapshot and self.g.children(self.w['inventory']):
+        running=self.controller.busy and self.controller.operation=='run'
+        signature=(shot,running,self.monitor_started)
+        if signature==self._inventory_signature and self.g.children(self.w['inventory']):
             return
+        self._inventory_signature=signature
         self.snapshot=shot
         g=self.g
         g.clear(self.w['inventory'])
         if not shot:
-            g.label(self.w['inventory_scope'],'尚未开始监测')
-            self.pack(self.w['inventory'],self.label('开始监测后显示最近一次空位结果\n编辑场馆和时段不会读取空位','muted',wrap=True))
+            g.label(self.w['inventory_scope'],'监测已启动 · 等待首次结果' if running else
+                    '本次尚未取得空位结果' if self.monitor_started else '尚未开始监测')
+            caption=('正在连接场馆并等待允许的读取时间，取得空位后会自动更新。' if running else
+                     '开始监测后显示最近一次空位结果\n编辑场馆和时段不会读取空位')
+            self.pack(self.w['inventory'],self.label(caption,'muted',wrap=True))
         else:
             g.label(self.w['inventory_scope'],f"{shot.get('venue','')} / {shot.get('sport','')} / {shot.get('active_date','')}")
             grid=g.gtk_grid_new()
@@ -1236,7 +1340,7 @@ class GtkDesktop:
     def tick(self):
         if self.destroyed:
             return False
-        latest,logs,until=None,False,time.monotonic()+0.006
+        latest,latest_shot,logs,until=None,None,False,time.monotonic()+0.006
         for _ in range(160):
             try:
                 kind,value=self.controller.events.get_nowait()
@@ -1249,6 +1353,12 @@ class GtkDesktop:
                 logs=True
             elif kind=='progress':
                 latest=value
+                if value.get('snapshot') is not None:
+                    latest_shot=value['snapshot']
+            elif kind=='busy' and value=='run':
+                latest,latest_shot=None,None
+                self.monitor_started=True
+                self.render_inventory(None)
             elif kind=='goal_completed':
                 self.show_completion(value)
             elif kind=='states':
@@ -1290,8 +1400,8 @@ class GtkDesktop:
                 break
         if latest:
             self.model.states.update({s['id']:s for s in latest.get('goals',[])})
-            if latest.get('snapshot') is not None:
-                self.render_inventory(latest['snapshot'])
+            if latest_shot is not None:
+                self.render_inventory(latest_shot)
             self.next_read_at=latest.get('monitor',{}).get('next_read_at')
             self.render_sidebar()
         if logs:
@@ -1360,6 +1470,10 @@ class GtkDesktop:
     # ==========================================
     def on_destroy(self):
         self.destroyed=True
+        if self.font_provider:
+            self.g.gtk_style_context_remove_provider_for_screen(self.g.gdk_screen_get_default(),self.font_provider)
+            self.g.g_object_unref(self.font_provider)
+            self.font_provider=None
         if self.application:
             self.g.g_application_quit(self.application)
 

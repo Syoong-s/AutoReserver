@@ -202,6 +202,8 @@ class DesktopController(Controller):
                 raise ValueError("请先在网站主界面登录，并点击保存登录")
             self.busy, self.operation, self.result = True, operation, None
             self.live_goals, self.monitor = [], {}
+            if operation == 'run':
+                self.snapshot = None
             self.stop_event.clear()
             self.capture_event.clear()
             self.emit("busy", operation)

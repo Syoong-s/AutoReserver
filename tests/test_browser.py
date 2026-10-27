@@ -181,10 +181,21 @@ class BrowserTests(unittest.TestCase):
     # Method: Change the visible price and require rejection before terms.
     # ==========================================
     def test_price_limit(self):
-        with self.browser("success&price=15") as (config, _, page):
+        with self.browser("success&price=15",max_total_price='10.0') as (config, _, page):
             with self.assertRaises(RuntimeError):
                 run_reservation(page, config, self.journal, self.root / "artifacts", submit=True)
             self.assertEqual(page.evaluate("submitClicks"), 0)
+
+    # ==========================================
+    # Function: Run a zero-duration monitor and accept a priced selection when its monetary cap is zero.
+    # Method: Exercise the real legacy adapter in preview mode and require no order or payment.
+    # ==========================================
+    def test_zero_duration_and_price_allow_unlimited_preview(self):
+        with self.browser('success&price=15',max_poll_seconds=0.0,max_total_price='0.0') as (config,_,page):
+            result=run_reservation(page,config,self.journal,self.root/'artifacts',submit=False)
+            self.assertEqual(result['status'],'preview')
+            self.assertEqual(page.evaluate('submitClicks'),0)
+            self.assertEqual(page.evaluate('payClicks'),0)
 
     # ==========================================
     # Function: Preserve a definite rejection without an automatic second order.

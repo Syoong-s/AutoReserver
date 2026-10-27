@@ -143,13 +143,20 @@ def self_test(root, test_source=None):
         from test_browser import BrowserTests
         from test_rush_browser import RushBrowserTests
         from test_catalog_browser import DirectoryBrowserTests
+        from test_multivenue import MultiVenueTests
         cases = [GtkWorkspaceTests(name) for name in (
             'test_settings_first_frame_has_native_close_only_header',
             'test_three_sections_remember_independent_folds',
             'test_rush_switch_copy_and_weekly_persistence',
             'test_sidebar_native_adjustment_clamps_at_top',
-            'test_rush_progress_keeps_fold_and_clock_uncertainty')]
+            'test_rush_progress_keeps_fold_and_clock_uncertainty',
+            'test_progress_batch_preserves_latest_inventory',
+            'test_logs_keep_fifty_lines_and_always_follow_tail',
+            'test_candidate_composer_preserves_drafts_on_dismiss',
+            'test_font_size_persists_without_changing_booking')]
         cases.extend([BrowserTests('test_submit_stops_before_payment'),
+                      BrowserTests('test_zero_duration_and_price_allow_unlimited_preview'),
+                      MultiVenueTests('test_zero_duration_continues_until_stopped'),
                       RushBrowserTests('test_release_gates_selection_and_discards_prewarm_stock')])
         cases.extend(DirectoryBrowserTests(name) for name in (
             'test_first_login_recovers_slow_directory_response',

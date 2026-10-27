@@ -223,7 +223,7 @@ class Config:
     poll_jitter_ratio: float = 0.2
     backoff_max_seconds: float = 600.0
     calendar_refresh_seconds: float = 300.0
-    max_poll_seconds: float = 300.0
+    max_poll_seconds: float = 0.0
     action_timeout_ms: int = 10000
     result_timeout_seconds: float = 30.0
     verification_timeout_seconds: float = 180.0
@@ -235,7 +235,7 @@ class Config:
 
     # ==========================================
     # Function: Validate configuration before browser launch.
-    # Method: Reject unknown types, unsafe URLs, and unbounded timings.
+    # Method: Reject invalid types/routes and enforce timing ranges with an explicit zero-duration unlimited sentinel.
     # ==========================================
     def validate(self, require_targets=False, allow_local=False):
         if type(self.initialized) is not bool:
@@ -277,7 +277,7 @@ class Config:
         for name, low, high in (
             ("poll_interval_seconds", 5, 3600), ("poll_jitter_ratio", 0, 1),
             ("backoff_max_seconds", 30, 3600), ("calendar_refresh_seconds", 60, 3600),
-            ("max_poll_seconds", 1, 86400),
+            ("max_poll_seconds", 0, 86400),
             ("action_timeout_ms", 100, 120000), ("result_timeout_seconds", 1, 600),
             ("verification_timeout_seconds", 1, 1800),
         ):
@@ -309,6 +309,13 @@ class Config:
             if not self.goals and any(date.fromisoformat(t.date) < today for t in self.targets):
                 raise ValueError("targets 中不能包含已过去的日期")
         return self
+
+    # ==========================================
+    # Function: Represent an unlimited monitoring duration without serializing nonfinite config values.
+    # Method: Convert the zero-duration sentinel to an infinite runtime deadline at each monitoring start.
+    # ==========================================
+    def monitor_deadline(self, now):
+        return now + self.max_poll_seconds if self.max_poll_seconds > 0 else math.inf
 
     # ==========================================
     # Function: Calculate a stable identity for this task.

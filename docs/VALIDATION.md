@@ -43,6 +43,14 @@ Final review also exercised a failed recalibration after an earlier successful e
 
 # Local validation — v0.12.0
 
+## Workbench improvements (2026-10-27)
+
+Using the existing runtimes without installing dependencies, Linux Python 3.14.4 passed 23 GTK regressions, 98 worker/config/browser regressions and 6 release checks. Windows Python 3.14.5 / GTK 3.24.52 passed the same 23 native UI cases, three targeted zero-limit/price cases and all 17 core cases. The core file-mode assertion is POSIX-only; account-lock exclusion is checked on both platforms.
+
+The Windows packaged self-test passed all 16 selected integrations, three native minimize/restore cycles, app icon/identity, work-area placement and account locking. New checks cover a snapshot followed by a status-only event in one GTK batch, multiline log truncation to 50 lines and forced tail following, composer dismissal with retained drafts, native font sizing and preference persistence, an unlimited-duration monitor stopped cooperatively, and a nonzero order price accepted with a zero cap in preview mode. Only loopback fixtures and temporary accounts were used; no real reservations or payments occurred.
+
+Python compilation and `git diff --check` passed. The final Windows ZIP was checked for integrity and byte-for-byte correspondence with the modified runtime sources before copying it to the Windows download folder. Native screenshots and the self-test report are kept under the ignored `artifacts/workbench/` directory. Existing user configuration and downloaded application folders were preserved.
+
 Linux's full `./test.sh` passed **233 tests in 205.466 seconds** after the shared platform changes. The 19 native GTK regressions passed again after the Windows font fallback adjustment; the eight new portability/bootstrap/archive tests are also independently runnable. Python AST/LF, GTK/Windows manifest XML, Bash, JavaScript and Git whitespace checks cover the final source tree.
 
 The Windows package was cross-built from WSL using the host's existing .NET Framework compiler and pinned CPython **3.14.5**, GTK **3.24.52**, GLib **2.90.1**, Playwright **1.64.1** and its Windows Chromium **156.0.8078.4**. All downloaded artifacts were checked against exact SHA256/size pins. Source/build/download work stayed in this repo; native execution was tested in an isolated temporary folder on the Windows local drive. No global Python, GTK, compiler environment or system package was installed, and TeleMail was only read for its existing Windows dependency inventory.

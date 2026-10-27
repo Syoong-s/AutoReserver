@@ -69,7 +69,7 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
     current_context, site, effective = None, None, None
     needs_load, selected_dirty, seed = True, False, None
     last_calendar = 0
-    deadline = time.monotonic() + config.max_poll_seconds
+    deadline = config.monitor_deadline(time.monotonic())
 
     # ==========================================
     # Function: Publish independent goal progress without mutating UI objects.
@@ -217,7 +217,7 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
         if submit and config.start_at and not has_rush:
             publish("等待设定的启动时间，尚未读取空位")
             wait_for_start(config, stop)
-            deadline = time.monotonic() + config.max_poll_seconds
+            deadline = config.monitor_deadline(time.monotonic())
         while not stop():
             try:
                 sync_daily()

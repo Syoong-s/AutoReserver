@@ -12,7 +12,7 @@
   "poll_jitter_ratio": 0.2,
   "backoff_max_seconds": 600.0,
   "calendar_refresh_seconds": 300.0,
-  "max_poll_seconds": 300.0,
+  "max_poll_seconds": 0.0,
   "action_timeout_ms": 10000,
   "result_timeout_seconds": 30.0,
   "verification_timeout_seconds": 180.0,

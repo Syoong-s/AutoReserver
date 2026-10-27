@@ -129,7 +129,8 @@ def verify_selection(snapshot, config, target):
     if any(compact(token) not in summary for token in [target.date, target.court, *target.slots]):
         raise RuntimeError("右侧订单摘要缺少目标日期、场地或时段，已停止")
     match = re.search(r"[￥¥]\s*(\d+(?:\.\d{1,2})?)\s*元", snapshot["total"])
-    if not match or Decimal(match[1]) > Decimal(config.max_total_price):
+    limit = Decimal(config.max_total_price)
+    if not match or (limit > 0 and Decimal(match[1]) > limit):
         raise RuntimeError("订单总价无法识别或超过 max_total_price，已停止")
 
 

@@ -59,6 +59,8 @@ class GtkNative:
                 'gtk_window_set_titlebar': (None,P,P), 'gtk_window_get_titlebar': (P,P),
                 'gtk_window_set_transient_for': (None,P,P), 'gtk_window_set_modal': (None,P,I),
                 'gtk_window_set_resizable': (None,P,I), 'gtk_window_get_resizable': (I,P),
+                'gtk_popover_new': (P,P), 'gtk_popover_popup': (None,P), 'gtk_popover_popdown': (None,P),
+                'gtk_popover_set_position': (None,P,I), 'gtk_popover_set_transitions_enabled': (None,P,I),
                 'gtk_header_bar_new': (P,), 'gtk_header_bar_set_title': (None,P,S),
                 'gtk_header_bar_set_show_close_button': (None,P,I), 'gtk_header_bar_set_decoration_layout': (None,P,S),
                 'gtk_header_bar_get_decoration_layout': (S,P),
@@ -101,16 +103,22 @@ class GtkNative:
                 'gtk_list_box_select_row': (None,P,P), 'gtk_list_box_get_row_at_index': (P,P,I),
                 'gtk_scrolled_window_new': (P,P,P), 'gtk_scrolled_window_set_policy': (None,P,I,I),
                 'gtk_scrolled_window_set_overlay_scrolling': (None,P,I),
+                'gtk_scrolled_window_set_min_content_height': (None,P,I),
+                'gtk_scrolled_window_set_max_content_height': (None,P,I),
+                'gtk_scrolled_window_set_propagate_natural_height': (None,P,I),
                 'gtk_scrolled_window_get_vadjustment': (P,P), 'gtk_adjustment_get_value': (D,P),
                 'gtk_adjustment_get_lower': (D,P), 'gtk_adjustment_get_upper': (D,P), 'gtk_adjustment_get_page_size': (D,P),
                 'gtk_adjustment_set_value': (None,P,D),
                 'gtk_text_view_get_buffer': (P,P), 'gtk_text_buffer_set_text': (None,P,S,I),
                 'gtk_text_buffer_get_end_iter': (None,P,P), 'gtk_text_buffer_insert': (None,P,P,S,I),
                 'gtk_text_view_scroll_to_iter': (I,P,P,D,I,D,D),
+                'gtk_text_buffer_get_insert': (P,P), 'gtk_text_buffer_place_cursor': (None,P,P),
+                'gtk_text_view_scroll_to_mark': (None,P,P,D,I,D,D),
                 'gtk_grid_new': (P,), 'gtk_grid_attach': (None,P,P,I,I,I,I),
                 'gtk_grid_set_row_spacing': (None,P,U), 'gtk_grid_set_column_spacing': (None,P,U),
                 'gtk_css_provider_new': (P,), 'gtk_css_provider_load_from_data': (I,P,S,C.c_ssize_t,P),
                 'gtk_style_context_add_provider_for_screen': (None,P,P,U),
+                'gtk_style_context_remove_provider_for_screen': (None,P,P),
                 'gtk_main_iteration_do': (I,I), 'gtk_events_pending': (I,),
                 'gtk_window_get_size': (None,P,C.POINTER(I),C.POINTER(I)), 'gtk_window_resize': (None,P,I,I),
             },
@@ -292,6 +300,25 @@ class GtkNative:
             raise RuntimeError(message)
         self.gtk_style_context_add_provider_for_screen(self.gdk_screen_get_default(),provider,600)
         self.g_object_unref(provider)
+
+    # ==========================================
+    # Function: Update an owned CSS provider for one desktop's scoped display preferences.
+    # Method: Validate UTF-8 CSS before registering a new provider and let the caller release its reference.
+    # ==========================================
+    def css_text(self, text, provider=None):
+        created = provider is None
+        provider = self.gtk_css_provider_new() if created else provider
+        error, data = P(), text.encode('utf-8')
+        if not self.gtk_css_provider_load_from_data(provider,data,len(data),C.byref(error)):
+            message = C.cast(error,C.POINTER(GError)).contents.message.decode() if error else 'Invalid GTK CSS'
+            if error:
+                self.g_error_free(error)
+            if created:
+                self.g_object_unref(provider)
+            raise RuntimeError(message)
+        if created:
+            self.gtk_style_context_add_provider_for_screen(self.gdk_screen_get_default(),provider,800)
+        return provider
 
     # ==========================================
     # Function: Set a class without replacing widget identities or selection state.

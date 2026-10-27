@@ -108,6 +108,20 @@ class MultiVenueTests(unittest.TestCase):
             self.assertEqual(page.evaluate("inventoryRequests"), 1)
 
     # ==========================================
+    # Function: Keep an unlimited multi-venue monitor running until cooperative stop.
+    # Method: Require two unavailable rounds with a zero duration and monitor-until-complete disabled.
+    # ==========================================
+    def test_zero_duration_continues_until_stopped(self):
+        goal=Goal('unlimited','持续监测',[self.target_at('A馆','soldout')])
+        with self.browser(goals=[goal],targets=[],max_poll_seconds=0.0,monitor_until_complete=False) as (config,_,page):
+            events=[]
+            result=run_reservation(page,config,self.journal,self.root/'artifacts',True,events.append,
+                                   stop=lambda:sum(e['message'].startswith('等待空位，') for e in events)>=2)
+            self.assertEqual(result['status'],'stopped')
+            self.assertGreaterEqual(result['monitor']['reads'],2)
+            self.assertEqual(page.evaluate('submitClicks'),0)
+
+    # ==========================================
     # Function: Pause all venues when an availability request is rate limited.
     # Method: Return one 429 with Retry-After and require recovery before any order.
     # ==========================================

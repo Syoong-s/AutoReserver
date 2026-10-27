@@ -174,6 +174,8 @@ class GtkWorkspaceTests(unittest.TestCase):
     # ==========================================
     def test_slot_scroller_retains_scroll_position_on_selection(self):
         app,g=self.app,self.g
+        app.open_builder()
+        self.wait_layout(lambda:g.gtk_adjustment_get_upper(g.gtk_scrolled_window_get_vadjustment(app.hour_scroll))>180)
         adjustment=g.gtk_scrolled_window_get_vadjustment(app.hour_scroll)
         self.assertGreater(g.gtk_adjustment_get_upper(adjustment),g.gtk_adjustment_get_page_size(adjustment))
         g.gtk_adjustment_set_value(adjustment,80)
@@ -217,6 +219,101 @@ class GtkWorkspaceTests(unittest.TestCase):
         self.assertEqual(app.snapshot,shot)
         self.assertTrue(g.children(app.w['inventory']))
         self.assertEqual(app.errors,[])
+
+    # ==========================================
+    # Function: Retain the latest grid when a later status-only event arrives in the same native batch.
+    # Method: Queue a real snapshot followed by snapshot=None and inspect the rendered inventory.
+    # ==========================================
+    def test_progress_batch_preserves_latest_inventory(self):
+        app,g=self.app,self.g
+        self.controller.busy,self.controller.operation=True,'run'
+        app.set_busy()
+        self.assertIn('等待首次结果',g.gtk_label_get_text(app.w['inventory_scope']).decode())
+        shot={'venue':'学生中心','sport':'健身房','active_date':app.model.day(),
+              'columns':['场地1'],'times':['14:00-15:00'],'rows':[['available']]}
+        self.controller.progress({'message':'已读到空位','snapshot':shot})
+        self.controller.progress({'message':'本轮已检查完毕','snapshot':None})
+        app.tick()
+        self.pump()
+        self.assertEqual(app.snapshot,shot)
+        self.assertIn('学生中心',g.gtk_label_get_text(app.w['inventory_scope']).decode())
+        self.controller.busy,self.controller.operation=False,'idle'
+
+    # ==========================================
+    # Function: Bound native execution records to fifty lines and follow new output after manual scrolling.
+    # Method: Emit multiline backend logs, inspect the actual buffer line count and verify its final adjustment.
+    # ==========================================
+    def test_logs_keep_fifty_lines_and_always_follow_tail(self):
+        app,g=self.app,self.g
+        for index in range(60):
+            self.controller.log(f'记录 {index}\n详情 {index}')
+        self.pump(.2)
+        self.assertEqual(len(app.logs),50)
+        count=g.libs['gtk'].gtk_text_buffer_get_line_count
+        count.argtypes,count.restype=[C.c_void_p],C.c_int
+        self.assertEqual(count(g.gtk_text_view_get_buffer(app.w['logs'])),50)
+        adjustment=g.gtk_scrolled_window_get_vadjustment(app.w['log_scroll'])
+        g.gtk_adjustment_set_value(adjustment,0)
+        self.controller.log('最新一行')
+        self.pump(.2)
+        maximum=g.gtk_adjustment_get_upper(adjustment)-g.gtk_adjustment_get_page_size(adjustment)
+        self.assertAlmostEqual(g.gtk_adjustment_get_value(adjustment),maximum,delta=2)
+        self.assertIn('最新一行',app.logs[-1])
+        self.assertEqual(len(app.logs),50)
+
+    # ==========================================
+    # Function: Expose a larger candidate list and a dismissible composer without losing per-goal drafts.
+    # Method: Open and close the native popover, retain selections and collapse its two independent sections.
+    # ==========================================
+    def test_candidate_composer_preserves_drafts_on_dismiss(self):
+        app,g=self.app,self.g
+        self.wait_layout(lambda:g.gtk_widget_get_allocated_height(app.candidate_scroll)>=240)
+        self.assertGreaterEqual(g.gtk_widget_get_allocated_height(app.candidate_scroll),240)
+        self.assertFalse(g.gtk_widget_get_visible(app.builder_popover))
+        app.open_builder()
+        self.wait_layout(lambda:g.gtk_widget_get_mapped(app.hour_scroll))
+        self.assertTrue(g.gtk_widget_get_mapped(app.builder_popover))
+        self.assertTrue(g.gtk_widget_get_mapped(app.hour_scroll))
+        app.add_venue()
+        g.gtk_popover_popdown(app.builder_popover)
+        self.pump()
+        app.open_builder()
+        self.pump()
+        self.assertEqual(len(app.model.drafts[app.model.selected]),1)
+        g.gtk_expander_set_expanded(app.venue_expander,False)
+        self.assertTrue(g.gtk_expander_get_expanded(app.choices_expander))
+        self.assertEqual(app.errors,[])
+
+    # ==========================================
+    # Function: Resize right-side text and persist the presentation choice independently of reservations.
+    # Method: Measure a native entry before/after resizing, preserve config bytes and reopen another workspace.
+    # ==========================================
+    def test_font_size_persists_without_changing_booking(self):
+        from autoreserve.gtk_desktop import GtkDesktop
+        app,g=self.app,self.g
+        original=self.controller.config_path.read_bytes()
+        dirty=app.model.dirty
+        preferred=g.libs['gtk'].gtk_widget_get_preferred_height
+        preferred.argtypes,preferred.restype=[C.c_void_p,C.POINTER(C.c_int),C.POINTER(C.c_int)],None
+        minimum,natural=C.c_int(),C.c_int()
+        preferred(app.mode,C.byref(minimum),C.byref(natural))
+        height=natural.value
+        app.set_font_size(18)
+        self.pump(.2)
+        preferred(app.mode,C.byref(minimum),C.byref(natural))
+        self.assertGreater(natural.value,height)
+        self.assertEqual(self.controller.config_path.read_bytes(),original)
+        self.assertEqual(app.model.dirty,dirty)
+        other=GtkDesktop(DesktopController(self.controller.config_path,self.controller.auth_dir),auto_catalog=False)
+        try:
+            self.assertEqual(other.font_size,18)
+            self.controller.busy,self.controller.operation=True,'run'
+            app.set_font_size(15)
+            self.assertEqual(app.font_size,15)
+        finally:
+            self.controller.busy,self.controller.operation=False,'idle'
+            other.destroy()
+            self.pump()
 
     # ==========================================
     # Function: Keep GTK responsive when configuration persistence is slow.
@@ -316,6 +413,8 @@ class GtkWorkspaceTests(unittest.TestCase):
     # ==========================================
     def test_wheel_over_padding_and_top_boundary(self):
         app,g=self.app,self.g
+        app.open_builder()
+        self.wait_layout(lambda:g.gtk_adjustment_get_upper(g.gtk_scrolled_window_get_vadjustment(app.hour_scroll))>180)
         adjustment=g.gtk_scrolled_window_get_vadjustment(app.hour_scroll)
         g.gtk_adjustment_set_value(adjustment,0)
         self.assertTrue(self.wheel(app.hour_scroll,1))
@@ -441,7 +540,8 @@ class GtkWorkspaceTests(unittest.TestCase):
     def test_three_sections_remember_independent_folds(self):
         app,g=self.app,self.g
         sections=[app.repeat_expander,app.rush_expander,app.target_expander]
-        self.assertTrue(all(g.gtk_widget_get_parent(section)==app.w['editor'] for section in sections))
+        self.assertTrue(all(g.gtk_widget_get_parent(section)==app.automation_body for section in sections[:2]))
+        self.assertEqual(g.gtk_widget_get_parent(app.target_expander),app.w['editor'])
         app.model.dirty=False
         for section in sections:
             g.gtk_expander_set_expanded(section,False)

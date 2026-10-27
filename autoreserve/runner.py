@@ -138,22 +138,23 @@ def run_reservation(page, config, journal, artifacts, submit=False, progress=Non
             return run_multivenue(page, config, journal, artifacts, submit, progress, stop, ReadPacer(config), refresh, prepare_auth)
         return run_plan(page, config, journal, artifacts, submit, progress, stop)
     journal.ensure_new(config)
+    stop = stop or (lambda: False)
     site = SjtuPage(page, config)
     page.goto(config.booking_url, wait_until="domcontentloaded")
     site.ready()
     site.choose_sport()
-    wait_for_start(config)
+    wait_for_start(config, stop)
     if config.start_at is not None:
         page.reload(wait_until="domcontentloaded")
         site.ready()
         site.choose_sport()
-    deadline = time.monotonic() + config.max_poll_seconds
+    deadline = config.monitor_deadline(time.monotonic())
     attempt = 0
-    while time.monotonic() < deadline:
+    while not stop() and time.monotonic() < deadline:
         attempt += 1
         LOG.info("第 %d 轮检查候选空位", attempt)
         for target in config.targets:
-            if time.monotonic() >= deadline:
+            if stop() or time.monotonic() >= deadline:
                 break
             if not site.choose_date(target.date):
                 continue
@@ -178,6 +179,8 @@ def run_reservation(page, config, journal, artifacts, submit=False, progress=Non
         page.reload(wait_until="domcontentloaded")
         site.ready()
         site.choose_sport()
+    if stop():
+        return evidence(page, artifacts, {"status": "stopped", "message": "监测已停止"})
     return evidence(page, artifacts, {"status": "no_availability", "message": "监测时间内未找到符合配置的空位"})
 
 
@@ -310,13 +313,13 @@ def run_plan(page, config, journal, artifacts, submit=False, progress=None, stop
     if all(s["status"] == "submitted" for s in states.values()):
         return finish("completed", "全部目标已有成功订单，无需重复预约")
     page.on("response", pacer.observe)
-    deadline = time.monotonic() + config.max_poll_seconds
+    deadline = config.monitor_deadline(time.monotonic())
     try:
         publish("所有未完成目标已加入监测，共用全局访问间隔")
         if submit and config.start_at:
             publish("等待设定的启动时间，尚未读取空位")
             wait_for_start(config, stop)
-            deadline = time.monotonic() + config.max_poll_seconds
+            deadline = config.monitor_deadline(time.monotonic())
         seed = read(load_booking)
         needs_load = seed is None
         last_calendar = time.monotonic()

@@ -205,6 +205,16 @@ The native editor exposes per-goal `rush` configuration through its persistent t
 
 ## Native Windows 11 (v0.12)
 
+### Workbench display and zero limits
+
+`Config.max_poll_seconds` defaults to `0.0`; `monitor_deadline()` translates zero into an infinite runtime deadline without storing infinity in JSON. All three reservation runners use it, including scheduled starts. Zero `max_total_price` disables the monetary ceiling while preserving price recognition, exact selection checks and the no-payment boundary. Existing configuration values are retained.
+
+The GTK workbench groups repeat/rush controls under a foldable automation section. A 248-pixel alternative list replaces the old 65/124-pixel rendering rule. Its anchored GtkPopover holds independently foldable venue and court/time editors, preserves per-goal drafts when dismissed and uses bounded native scrolling. Scoped CSS providers implement 11–20 px right-panel fonts; `config/desktop-ui.json` is a separate presentation preference, and providers are removed when their workspace is destroyed.
+
+Log rendering keeps the latest 50 logical lines, including multiline messages, and follows a GtkTextMark after native text layout. Progress batches coalesce status and non-null inventory snapshots separately. A running client with no snapshot displays a waiting-for-first-result state instead of incorrectly claiming monitoring has not begun.
+
+Validation uses the existing Python 3.14.4, GTK 3 and Playwright 1.64.1 on WSL, and the portable Python 3.14.5 / GTK 3.24.52 on Windows. Syntax checks use `python -m compileall -q autoreserve scripts tests`. Native UI tests use `RUN_GTK_TESTS=1 python -m unittest discover -s tests -p test_gtk.py -v`; worker/browser regressions additionally enable `RUN_BROWSER_TESTS=1`. Prepare the existing private runtime with `scripts.bootstrap.environment()` before launching Linux tests. Build with `python tools/build_windows.py`; the Windows `--self-test --test-source SOURCE_DIRECTORY` suite includes the new zero-limit, composer, font, log-tail and batched-inventory regressions. No dependencies were added.
+
 The Python reservation/editor code is shared between Linux and Windows. `native_runtime.py` resolves the same GTK C ABI to either Linux SONAMEs or explicit app-private Windows DLL paths, retains DLL-directory cookies and enables Win32/per-monitor DPI behavior. `filelock.py` preserves POSIX locks on Linux and implements a stable one-byte CRT lock on Windows. The Windows payload includes tzdata for IANA timezone support and loads all text/configuration using UTF-8.
 
 `native/windows-launcher.cs` is compiled to a GUI-subsystem x64 EXE using Windows' existing .NET Framework compiler. It forwards arguments directly to embedded CPython, cleans inherited Python overrides, shows asynchronous first-run progress and propagates the child result. `scripts/windows_launch.py` verifies app-local dependencies and starts the existing GtkApplication in the same Python process. A separate desktop lock prevents duplicate native Windows editors for the same folder; account locking still surrounds actual worker sessions.

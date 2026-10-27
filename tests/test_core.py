@@ -3,6 +3,7 @@
 from dataclasses import replace
 from datetime import datetime, timedelta
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -143,13 +144,29 @@ class CoreTests(unittest.TestCase):
     # Method: Reject additional cells, shifted time, wrong venue, and over-budget orders.
     # ==========================================
     def test_selection_integrity(self):
-        config = Config(venue="测试馆")
+        config = Config(venue="测试馆",max_total_price="5.00")
         verify_selection(snapshot(), config, target())
         for update in ({"selected_count": 2}, {"venue": "另一个馆"},
                        {"total": "实际金额：￥10元"}, {"total": "未知金额"},
                        {"summary": "场地1 15:00-16:00"}):
             with self.subTest(update=update), self.assertRaises(RuntimeError):
                 verify_selection(snapshot() | update, config, target())
+
+    # ==========================================
+    # Function: Interpret zero monitoring duration and zero monetary cap as explicit unlimited sentinels.
+    # Method: Check finite config persistence, runtime deadlines and price recognition independently.
+    # ==========================================
+    def test_zero_limits_are_unlimited(self):
+        config=Config(venue='测试馆',max_total_price='0.0')
+        self.assertEqual(config.max_poll_seconds,0.0)
+        config.validate()
+        self.assertEqual(config.monitor_deadline(100),float('inf'))
+        self.assertEqual(replace(config,max_poll_seconds=60).monitor_deadline(100),160)
+        verify_selection(snapshot()|{'total':'实际金额：￥150元'},config,target())
+        with self.assertRaises(RuntimeError):
+            verify_selection(snapshot()|{'total':'未知金额'},config,target())
+        with self.assertRaises(ValueError):
+            replace(config,max_poll_seconds=-1).validate()
 
     # ==========================================
     # Function: Avoid assuming success from a click or incomplete response.
@@ -201,7 +218,7 @@ class CoreTests(unittest.TestCase):
 
     # ==========================================
     # Function: Keep account access exclusive and auth files private.
-    # Method: Acquire nested locks and inspect the written file mode.
+    # Method: Verify nested-lock exclusion on both platforms and POSIX mode bits where the OS supports them.
     # ==========================================
     def test_lock_and_private_files(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -211,7 +228,8 @@ class CoreTests(unittest.TestCase):
                         pass
             path = Path(directory) / "auth.json"
             private_json(path, {"token": "local-test-only"})
-            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            if os.name == 'posix':
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
     # ==========================================
     # Function: Validate multi-date goals and preserve candidate priority.
