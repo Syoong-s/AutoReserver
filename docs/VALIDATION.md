@@ -43,6 +43,12 @@ Final review also exercised a failed recalibration after an earlier successful e
 
 # Local validation — v0.12.0
 
+## Global typography and draggable regions (source-only, 2026-10-27)
+
+Python 3.14.4 with the existing GTK 3 runtime passed 25 native UI regressions, including settings-based typography on the sidebar/editor/dialogs, display settings during monitoring with booking fields disabled, native divider allocations for all five pane handles, independent monitor-card heights, debounced preference persistence, restoration and layout reset without changing the font or booking configuration. Nine platform/runtime checks also passed. No dependencies were installed and no Windows package was generated.
+
+Run syntax checks with `python -m compileall -q autoreserve scripts tests`; run native checks with `RUN_GTK_TESTS=1 python -m unittest discover -s tests -p test_gtk.py -v` and runtime checks with `python -m unittest discover -s tests -p test_windows.py -v`. Linux tests load the existing private runtime environment through `scripts.bootstrap.environment()`. GtkBuilder parsing, LF line endings and `git diff --check` passed. Main-window and settings renders were inspected with temporary local fixtures.
+
 ## Workbench improvements (2026-10-27)
 
 Using the existing runtimes without installing dependencies, Linux Python 3.14.4 passed 23 GTK regressions, 98 worker/config/browser regressions and 6 release checks. Windows Python 3.14.5 / GTK 3.24.52 passed the same 23 native UI cases, three targeted zero-limit/price cases and all 17 core cases. The core file-mode assertion is POSIX-only; account-lock exclusion is checked on both platforms.

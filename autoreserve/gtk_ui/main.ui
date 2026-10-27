@@ -20,14 +20,17 @@
       </object>
     </child>
     <child>
-      <object class="GtkBox" id="layout">
+      <object class="GtkPaned" id="layout">
+        <property name="position">278</property>
+        <property name="wide-handle">True</property>
+        <property name="orientation">horizontal</property>
         <child>
           <object class="GtkBox" id="sidebar">
             <property name="orientation">vertical</property>
-            <property name="width-request">258</property>
+            <property name="width-request">180</property>
             <property name="spacing">14</property>
             <property name="margin">18</property>
-            <property name="hexpand">False</property>
+            <property name="hexpand">True</property>
             <property name="hexpand-set">True</property>
             <style>
               <class name="sidebar" />
@@ -155,7 +158,7 @@
             </child>
             <child>
               <object class="GtkButton" id="settings">
-                <property name="label">执行设置</property>
+                <property name="label">设置</property>
                 <style>
                   <class name="secondary" />
                 </style>
@@ -193,8 +196,8 @@
             </child>
           </object>
           <packing>
-            <property name="expand">False</property>
-            <property name="fill">True</property>
+            <property name="resize">False</property>
+            <property name="shrink">False</property>
           </packing>
         </child>
         <child>
@@ -341,175 +344,217 @@
               </packing>
             </child>
             <child>
-              <object class="GtkScrolledWindow" id="editor_scroll">
-                <property name="hscrollbar-policy">never</property>
-                <property name="vscrollbar-policy">automatic</property>
-                <property name="overlay-scrolling">False</property>
+              <object class="GtkPaned" id="workspace_split">
                 <property name="vexpand">True</property>
-                <property name="height-request">290</property>
+                <property name="wide-handle">True</property>
+                <property name="orientation">vertical</property>
                 <child>
-                  <object class="GtkViewport">
+                  <object class="GtkScrolledWindow" id="editor_scroll">
+                    <property name="hscrollbar-policy">never</property>
+                    <property name="vscrollbar-policy">automatic</property>
+                    <property name="overlay-scrolling">False</property>
+                    <property name="vexpand">True</property>
+                    <property name="height-request">160</property>
                     <child>
-                      <object class="GtkBox" id="editor">
-                        <property name="orientation">vertical</property>
-                        <property name="spacing">14</property>
-                        <property name="margin-end">8</property>
-                        <property name="margin-bottom">4</property>
-                        <style>
-                          <class name="editor-card" />
-                        </style>
+                      <object class="GtkViewport">
+                        <child>
+                          <object class="GtkBox" id="editor">
+                            <property name="orientation">vertical</property>
+                            <property name="spacing">14</property>
+                            <property name="margin-end">8</property>
+                            <property name="margin-bottom">4</property>
+                            <style>
+                              <class name="editor-card" />
+                            </style>
+                          </object>
+                        </child>
                       </object>
                     </child>
                   </object>
+                  <packing>
+                    <property name="resize">True</property>
+                    <property name="shrink">False</property>
+                  </packing>
+                </child>
+                <child>
+                  <object class="GtkPaned" id="monitoring">
+                    <property name="wide-handle">True</property>
+                    <property name="orientation">horizontal</property>
+                    <child>
+                      <object class="GtkPaned" id="log_split">
+                        <property name="wide-handle">True</property>
+                        <property name="orientation">vertical</property>
+                        <child>
+                          <object class="GtkBox" id="log_card">
+                            <property name="orientation">vertical</property>
+                            <property name="spacing">10</property>
+                            <style>
+                              <class name="monitor-card" />
+                            </style>
+                            <child>
+                              <object class="GtkBox">
+                                <child>
+                                  <object class="GtkLabel">
+                                    <property name="label">执行记录</property>
+                                    <property name="xalign">0</property>
+                                    <property name="hexpand">True</property>
+                                    <style>
+                                      <class name="section-title" />
+                                    </style>
+                                  </object>
+                                  <packing>
+                                    <property name="expand">True</property>
+                                    <property name="fill">True</property>
+                                  </packing>
+                                </child>
+                                <child>
+                                  <object class="GtkLabel" id="run_badge">
+                                    <property name="label">待命</property>
+                                    <style>
+                                      <class name="badge" />
+                                    </style>
+                                  </object>
+                                  <packing>
+                                    <property name="expand">False</property>
+                                    <property name="fill">True</property>
+                                  </packing>
+                                </child>
+                              </object>
+                              <packing>
+                                <property name="expand">False</property>
+                                <property name="fill">True</property>
+                              </packing>
+                            </child>
+                            <child>
+                              <object class="GtkScrolledWindow" id="log_scroll">
+                                <property name="hscrollbar-policy">never</property>
+                                <property name="overlay-scrolling">False</property>
+                                <property name="vexpand">True</property>
+                                <property name="height-request">64</property>
+                                <child>
+                                  <object class="GtkTextView" id="logs">
+                                    <property name="editable">False</property>
+                                    <property name="cursor-visible">False</property>
+                                    <property name="wrap-mode">word-char</property>
+                                    <property name="left-margin">2</property>
+                                    <property name="right-margin">6</property>
+                                    <property name="pixels-below-lines">7</property>
+                                    <style>
+                                      <class name="log-text" />
+                                    </style>
+                                  </object>
+                                </child>
+                              </object>
+                              <packing>
+                                <property name="expand">True</property>
+                                <property name="fill">True</property>
+                              </packing>
+                            </child>
+                          </object>
+                          <packing>
+                            <property name="resize">True</property>
+                            <property name="shrink">False</property>
+                          </packing>
+                        </child>
+                        <child>
+                          <object class="GtkBox" id="log_split_space" />
+                          <packing>
+                            <property name="resize">False</property>
+                            <property name="shrink">True</property>
+                          </packing>
+                        </child>
+                      </object>
+                      <packing>
+                        <property name="resize">True</property>
+                        <property name="shrink">False</property>
+                      </packing>
+                    </child>
+                    <child>
+                      <object class="GtkPaned" id="inventory_split">
+                        <property name="wide-handle">True</property>
+                        <property name="orientation">vertical</property>
+                        <child>
+                          <object class="GtkBox" id="inventory_card">
+                            <property name="orientation">vertical</property>
+                            <property name="spacing">10</property>
+                            <style>
+                              <class name="monitor-card" />
+                            </style>
+                            <child>
+                              <object class="GtkLabel">
+                                <property name="label">空位监测</property>
+                                <property name="xalign">0</property>
+                                <style>
+                                  <class name="section-title" />
+                                </style>
+                              </object>
+                              <packing>
+                                <property name="expand">False</property>
+                                <property name="fill">True</property>
+                              </packing>
+                            </child>
+                            <child>
+                              <object class="GtkLabel" id="inventory_scope">
+                                <property name="label">尚未开始监测</property>
+                                <property name="xalign">0</property>
+                                <property name="ellipsize">end</property>
+                                <style>
+                                  <class name="caption" />
+                                </style>
+                              </object>
+                              <packing>
+                                <property name="expand">False</property>
+                                <property name="fill">True</property>
+                              </packing>
+                            </child>
+                            <child>
+                              <object class="GtkScrolledWindow" id="inventory_scroll">
+                                <property name="overlay-scrolling">False</property>
+                                <property name="vexpand">True</property>
+                                <property name="height-request">64</property>
+                                <child>
+                                  <object class="GtkViewport">
+                                    <child>
+                                      <object class="GtkBox" id="inventory">
+                                        <property name="orientation">vertical</property>
+                                      </object>
+                                    </child>
+                                  </object>
+                                </child>
+                              </object>
+                              <packing>
+                                <property name="expand">True</property>
+                                <property name="fill">True</property>
+                              </packing>
+                            </child>
+                          </object>
+                          <packing>
+                            <property name="resize">True</property>
+                            <property name="shrink">False</property>
+                          </packing>
+                        </child>
+                        <child>
+                          <object class="GtkBox" id="inventory_split_space" />
+                          <packing>
+                            <property name="resize">False</property>
+                            <property name="shrink">True</property>
+                          </packing>
+                        </child>
+                      </object>
+                      <packing>
+                        <property name="resize">True</property>
+                        <property name="shrink">False</property>
+                      </packing>
+                    </child>
+                  </object>
+                  <packing>
+                    <property name="resize">False</property>
+                    <property name="shrink">False</property>
+                  </packing>
                 </child>
               </object>
               <packing>
                 <property name="expand">True</property>
-                <property name="fill">True</property>
-              </packing>
-            </child>
-            <child>
-              <object class="GtkBox" id="monitoring">
-                <property name="spacing">14</property>
-                <property name="homogeneous">True</property>
-                <property name="height-request">204</property>
-                <property name="vexpand">False</property>
-                <property name="vexpand-set">True</property>
-                <child>
-                  <object class="GtkBox" id="log_card">
-                    <property name="orientation">vertical</property>
-                    <property name="spacing">10</property>
-                    <style>
-                      <class name="monitor-card" />
-                    </style>
-                    <child>
-                      <object class="GtkBox">
-                        <child>
-                          <object class="GtkLabel">
-                            <property name="label">执行记录</property>
-                            <property name="xalign">0</property>
-                            <property name="hexpand">True</property>
-                            <style>
-                              <class name="section-title" />
-                            </style>
-                          </object>
-                          <packing>
-                            <property name="expand">True</property>
-                            <property name="fill">True</property>
-                          </packing>
-                        </child>
-                        <child>
-                          <object class="GtkLabel" id="run_badge">
-                            <property name="label">待命</property>
-                            <style>
-                              <class name="badge" />
-                            </style>
-                          </object>
-                          <packing>
-                            <property name="expand">False</property>
-                            <property name="fill">True</property>
-                          </packing>
-                        </child>
-                      </object>
-                      <packing>
-                        <property name="expand">False</property>
-                        <property name="fill">True</property>
-                      </packing>
-                    </child>
-                    <child>
-                      <object class="GtkScrolledWindow" id="log_scroll">
-                        <property name="hscrollbar-policy">never</property>
-                        <property name="overlay-scrolling">False</property>
-                        <property name="vexpand">True</property>
-                        <property name="height-request">128</property>
-                        <child>
-                          <object class="GtkTextView" id="logs">
-                            <property name="editable">False</property>
-                            <property name="cursor-visible">False</property>
-                            <property name="wrap-mode">word-char</property>
-                            <property name="left-margin">2</property>
-                            <property name="right-margin">6</property>
-                            <property name="pixels-below-lines">7</property>
-                            <style>
-                              <class name="log-text" />
-                            </style>
-                          </object>
-                        </child>
-                      </object>
-                      <packing>
-                        <property name="expand">True</property>
-                        <property name="fill">True</property>
-                      </packing>
-                    </child>
-                  </object>
-                  <packing>
-                    <property name="expand">True</property>
-                    <property name="fill">True</property>
-                  </packing>
-                </child>
-                <child>
-                  <object class="GtkBox" id="inventory_card">
-                    <property name="orientation">vertical</property>
-                    <property name="spacing">10</property>
-                    <style>
-                      <class name="monitor-card" />
-                    </style>
-                    <child>
-                      <object class="GtkLabel">
-                        <property name="label">空位监测</property>
-                        <property name="xalign">0</property>
-                        <style>
-                          <class name="section-title" />
-                        </style>
-                      </object>
-                      <packing>
-                        <property name="expand">False</property>
-                        <property name="fill">True</property>
-                      </packing>
-                    </child>
-                    <child>
-                      <object class="GtkLabel" id="inventory_scope">
-                        <property name="label">尚未开始监测</property>
-                        <property name="xalign">0</property>
-                        <property name="ellipsize">end</property>
-                        <style>
-                          <class name="caption" />
-                        </style>
-                      </object>
-                      <packing>
-                        <property name="expand">False</property>
-                        <property name="fill">True</property>
-                      </packing>
-                    </child>
-                    <child>
-                      <object class="GtkScrolledWindow" id="inventory_scroll">
-                        <property name="overlay-scrolling">False</property>
-                        <property name="vexpand">True</property>
-                        <property name="height-request">104</property>
-                        <child>
-                          <object class="GtkViewport">
-                            <child>
-                              <object class="GtkBox" id="inventory">
-                                <property name="orientation">vertical</property>
-                              </object>
-                            </child>
-                          </object>
-                        </child>
-                      </object>
-                      <packing>
-                        <property name="expand">True</property>
-                        <property name="fill">True</property>
-                      </packing>
-                    </child>
-                  </object>
-                  <packing>
-                    <property name="expand">True</property>
-                    <property name="fill">True</property>
-                  </packing>
-                </child>
-              </object>
-              <packing>
-                <property name="expand">False</property>
                 <property name="fill">True</property>
               </packing>
             </child>
@@ -529,8 +574,8 @@
             </child>
           </object>
           <packing>
-            <property name="expand">True</property>
-            <property name="fill">True</property>
+            <property name="resize">True</property>
+            <property name="shrink">False</property>
           </packing>
         </child>
       </object>

@@ -67,6 +67,9 @@ button.choice:checked:hover { background: #dfebff; }
 .error-banner { background: #fff1f0; color: #a13a37; border-radius: 8px; padding: 9px 12px; }
 .settings-body { background: #fff; padding: 22px; }
 separator { background: #e7eaf0; min-height: 1px; }
+paned > separator.wide { background: #e2e7ef; background-image: none; border-radius: 4px; min-width: 8px; min-height: 8px; }
+paned > separator.wide:hover { background: #c2d0e4; }
+paned > separator.wide:active { background: #7da2dd; }
 
 /* Status is carried by the whole row surface and a four-pixel accent, including selection. */
 .goal-list row { border-left-width: 4px; }

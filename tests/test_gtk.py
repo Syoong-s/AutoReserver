@@ -1,6 +1,7 @@
 """Production GTK widget regressions with local fixtures; no live browser or orders."""
 
 import ctypes as C
+import json
 from copy import deepcopy
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -98,17 +99,17 @@ class GtkWorkspaceTests(unittest.TestCase):
         self.assertEqual(self.app.errors,[])
 
     # ==========================================
-    # Function: Keep record and inventory panels fixed below the editor at laptop size.
-    # Method: Resize the actual window and compare native allocations while scrolling the editor.
+    # Function: Keep monitor cards independent of target scrolling inside the resizable pane tree.
+    # Method: Inspect native parents and preserve monitor allocations while scrolling the editor.
     # ==========================================
-    def test_monitor_panels_are_separate_and_fixed(self):
+    def test_monitor_panels_are_separate_from_editor_scrolling(self):
         g,app=self.g,self.app
         g.gtk_window_resize(app.window,1120,820)
         self.pump(.1)
         self.assertNotEqual(app.w['log_card'],app.w['inventory_card'])
-        self.assertEqual(g.gtk_widget_get_parent(app.w['log_card']),app.w['monitoring'])
-        self.assertEqual(g.gtk_widget_get_parent(app.w['inventory_card']),app.w['monitoring'])
-        self.assertEqual(g.gtk_widget_get_parent(app.w['monitoring']),app.w['main'])
+        self.assertEqual(g.gtk_widget_get_parent(app.w['log_card']),app.w['log_split'])
+        self.assertEqual(g.gtk_widget_get_parent(app.w['inventory_card']),app.w['inventory_split'])
+        self.assertEqual(g.gtk_widget_get_parent(app.w['monitoring']),app.w['workspace_split'])
         self.assertLess(g.gtk_widget_get_allocated_height(app.w['monitoring']),260)
         self.assertLess(g.gtk_widget_get_allocated_width(app.w['sidebar']),320)
         adjustment=g.gtk_scrolled_window_get_vadjustment(app.w['editor_scroll'])
@@ -117,6 +118,72 @@ class GtkWorkspaceTests(unittest.TestCase):
         self.pump()
         self.assertEqual(before,(g.gtk_widget_get_allocated_height(app.w['log_card']),g.gtk_widget_get_allocated_height(app.w['inventory_card'])))
         self.assertTrue(g.gtk_widget_get_mapped(app.w['logs']))
+
+    # ==========================================
+    # Function: Resize the sidebar, target area and both monitor cards through native pane handles.
+    # Method: Move each native divider and verify actual widget widths/heights, including independent card bottoms.
+    # ==========================================
+    def test_native_dividers_resize_all_workspace_panels(self):
+        app,g=self.app,self.g
+        self.wait_layout(lambda:app._layout_ready)
+        for pane in app.panes.values():
+            self.assertTrue(g.gtk_paned_get_wide_handle(pane))
+            self.assertTrue(g.gtk_paned_get_handle_window(pane))
+        sidebar=g.gtk_widget_get_allocated_width(app.w['sidebar'])
+        position=g.gtk_paned_get_position(app.w['layout'])
+        g.gtk_paned_set_position(app.w['layout'],position+70)
+        self.wait_layout(lambda:g.gtk_widget_get_allocated_width(app.w['sidebar'])>sidebar+50)
+        target=g.gtk_widget_get_allocated_height(app.w['editor_scroll'])
+        position=g.gtk_paned_get_position(app.w['workspace_split'])
+        g.gtk_paned_set_position(app.w['workspace_split'],position-70)
+        self.wait_layout(lambda:g.gtk_widget_get_allocated_height(app.w['editor_scroll'])<target-50)
+        width=g.gtk_widget_get_allocated_width(app.w['log_card'])
+        g.gtk_paned_set_position(app.w['monitoring'],g.gtk_paned_get_position(app.w['monitoring'])-80)
+        self.wait_layout(lambda:g.gtk_widget_get_allocated_width(app.w['log_card'])<width-60)
+        stock=g.gtk_widget_get_allocated_height(app.w['inventory_card'])
+        g.gtk_paned_set_position(app.w['log_split'],150)
+        self.wait_layout(lambda:g.gtk_widget_get_allocated_height(app.w['log_card'])<180)
+        self.assertAlmostEqual(g.gtk_widget_get_allocated_height(app.w['inventory_card']),stock,delta=2)
+        log=g.gtk_widget_get_allocated_height(app.w['log_card'])
+        g.gtk_paned_set_position(app.w['inventory_split'],170)
+        self.wait_layout(lambda:g.gtk_widget_get_allocated_height(app.w['inventory_card'])<200)
+        self.assertAlmostEqual(g.gtk_widget_get_allocated_height(app.w['log_card']),log,delta=2)
+        self.assertEqual(app.errors,[])
+
+    # ==========================================
+    # Function: Persist pane geometry and global font together without changing booking configuration.
+    # Method: Resize real panes, wait for the debounced save and verify restored allocations in a second workspace.
+    # ==========================================
+    def test_layout_preferences_restore_and_keep_font(self):
+        from autoreserve.gtk_desktop import GtkDesktop
+        app,g=self.app,self.g
+        self.wait_layout(lambda:app._layout_ready)
+        config=self.controller.config_path.read_bytes()
+        dirty=app.model.dirty
+        app.set_font_size(15)
+        self.pump(.12)
+        g.gtk_paned_set_position(app.w['layout'],355)
+        g.gtk_paned_set_position(app.w['monitoring'],430)
+        self.pump(.4)
+        stored=json.loads(app.ui_path.read_text())
+        self.assertEqual(stored['font_size'],15)
+        self.assertEqual(stored['panes']['layout'],g.gtk_paned_get_position(app.w['layout']))
+        self.assertEqual(self.controller.config_path.read_bytes(),config)
+        self.assertEqual(app.model.dirty,dirty)
+        other=GtkDesktop(DesktopController(self.controller.config_path,self.controller.auth_dir),auto_catalog=False)
+        try:
+            self.wait_layout(lambda:other._layout_ready)
+            self.pump(.12)
+            self.assertEqual(other.font_size,15)
+            self.assertEqual(other.g.gtk_paned_get_position(other.w['layout']),stored['panes']['layout'])
+            self.assertEqual(other.g.gtk_paned_get_position(other.w['monitoring']),stored['panes']['monitoring'])
+            other.reset_layout()
+            self.pump(.12)
+            self.assertNotEqual(other.g.gtk_paned_get_position(other.w['layout']),stored['panes']['layout'])
+            self.assertEqual(other.font_size,15)
+        finally:
+            other.destroy()
+            self.pump()
 
     # ==========================================
     # Function: Prevent inverse/negative overscroll at the sidebar's upper boundary.
@@ -285,8 +352,8 @@ class GtkWorkspaceTests(unittest.TestCase):
         self.assertEqual(app.errors,[])
 
     # ==========================================
-    # Function: Resize right-side text and persist the presentation choice independently of reservations.
-    # Method: Measure a native entry before/after resizing, preserve config bytes and reopen another workspace.
+    # Function: Apply settings-based global fonts to the sidebar, editor and dialogs independently of reservations.
+    # Method: Measure native sidebar/editor text, change the settings spinner and verify persistence plus busy-state access.
     # ==========================================
     def test_font_size_persists_without_changing_booking(self):
         from autoreserve.gtk_desktop import GtkDesktop
@@ -296,19 +363,32 @@ class GtkWorkspaceTests(unittest.TestCase):
         preferred=g.libs['gtk'].gtk_widget_get_preferred_height
         preferred.argtypes,preferred.restype=[C.c_void_p,C.POINTER(C.c_int),C.POINTER(C.c_int)],None
         minimum,natural=C.c_int(),C.c_int()
-        preferred(app.mode,C.byref(minimum),C.byref(natural))
-        height=natural.value
-        app.set_font_size(18)
+        widgets=[app.mode,app.sidebar_rows[app.model.selected][1]]
+        sizes=[]
+        for widget in widgets:
+            preferred(widget,C.byref(minimum),C.byref(natural))
+            sizes.append(natural.value)
+        app.open_settings()
+        g.gtk_spin_button_set_value(app.font_spin,18)
         self.pump(.2)
-        preferred(app.mode,C.byref(minimum),C.byref(natural))
-        self.assertGreater(natural.value,height)
+        for widget,height in zip(widgets,sizes):
+            preferred(widget,C.byref(minimum),C.byref(natural))
+            self.assertGreater(natural.value,height)
+        self.assertEqual(app.font_size,18)
         self.assertEqual(self.controller.config_path.read_bytes(),original)
         self.assertEqual(app.model.dirty,dirty)
         other=GtkDesktop(DesktopController(self.controller.config_path,self.controller.auth_dir),auto_catalog=False)
         try:
             self.assertEqual(other.font_size,18)
+            g.gtk_widget_destroy(app.settings_window)
             self.controller.busy,self.controller.operation=True,'run'
-            app.set_font_size(15)
+            app.set_busy()
+            app.open_settings()
+            self.assertTrue(g.gtk_widget_get_sensitive(app.w['settings']))
+            self.assertTrue(g.gtk_widget_get_sensitive(app.font_spin))
+            self.assertFalse(g.gtk_widget_get_sensitive(app.settings_fields['poll_interval_seconds']))
+            self.assertFalse(g.gtk_widget_get_sensitive(app.settings_save))
+            g.gtk_spin_button_set_value(app.font_spin,15)
             self.assertEqual(app.font_size,15)
         finally:
             self.controller.busy,self.controller.operation=False,'idle'

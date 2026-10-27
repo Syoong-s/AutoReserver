@@ -82,6 +82,8 @@ class GtkNative:
                 'gtk_container_add': (None,P,P), 'gtk_container_remove': (None,P,P),
                 'gtk_container_get_children': (C.POINTER(GList),P), 'gtk_container_set_border_width': (None,P,U),
                 'gtk_box_new': (P,I,I), 'gtk_box_pack_start': (None,P,P,I,I,U), 'gtk_box_pack_end': (None,P,P,I,I,U),
+                'gtk_paned_get_position': (I,P), 'gtk_paned_set_position': (None,P,I),
+                'gtk_paned_get_handle_window': (P,P), 'gtk_paned_get_wide_handle': (I,P),
                 'gtk_expander_new': (P,S), 'gtk_expander_set_expanded': (None,P,I),
                 'gtk_expander_get_expanded': (I,P), 'gtk_expander_set_label': (None,P,S),
                 'gtk_label_new': (P,S), 'gtk_label_set_text': (None,P,S), 'gtk_label_get_text': (S,P),

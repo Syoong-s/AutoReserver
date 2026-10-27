@@ -154,6 +154,9 @@ def self_test(root, test_source=None):
             'test_logs_keep_fifty_lines_and_always_follow_tail',
             'test_candidate_composer_preserves_drafts_on_dismiss',
             'test_font_size_persists_without_changing_booking')]
+        cases.extend(GtkWorkspaceTests(name) for name in (
+            'test_native_dividers_resize_all_workspace_panels',
+            'test_layout_preferences_restore_and_keep_font'))
         cases.extend([BrowserTests('test_submit_stops_before_payment'),
                       BrowserTests('test_zero_duration_and_price_allow_unlimited_preview'),
                       MultiVenueTests('test_zero_duration_continues_until_stopped'),

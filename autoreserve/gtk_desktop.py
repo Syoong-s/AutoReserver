@@ -52,6 +52,11 @@ class GtkDesktop:
         self.logs, self.snapshot = [], None
         self.monitor_started, self._inventory_signature = False, None
         self.font_provider = None
+        self.font_spin = None
+        self.layout_save_timer = None
+        self.layout_restore_timer = None
+        self._layout_ready = self._restoring_layout = False
+        self._layout_phase = 0
         self._sidebar_order, self._court_scope, self._busy = None, None, None
         self._sidebar_captions, self._row_tones = {}, {}
         self._folds, self._rush_status_text = {}, None
@@ -60,7 +65,8 @@ class GtkDesktop:
         ids = ['window','header','sidebar','main','new_goal','goals','goal_scroll','goal_count','goal_up','goal_down',
                'settings','auth','login','summary','save','start','stop','capture','editor','editor_scroll',
                'error_bar','error','dismiss_error','monitoring','log_card','inventory_card','logs','log_scroll',
-               'run_badge','inventory','inventory_scope','inventory_scroll','status']
+               'run_badge','inventory','inventory_scope','inventory_scroll','status',
+               'layout','workspace_split','log_split','inventory_split']
         self.w = {name:g.object(self.builder,name) for name in ids}
         self.window = self.w['window']
         g.configure_desktop_window(self.window)
@@ -68,7 +74,8 @@ class GtkDesktop:
             g.gtk_window_set_application(self.window,application)
         g.css(ASSETS/'style.css')
         self.build_editor()
-        self.build_display_controls()
+        self.load_display_preferences()
+        self.bind_layout()
         self.bind_actions()
         self.model.states = {s['id']:s for s in controller.state()['goals']}
         legend=self.box(spacing=10)
@@ -86,6 +93,7 @@ class GtkDesktop:
         g.gtk_widget_show_all(self.window)
         self.refresh_visibility()
         self.timer = g.later(33,self.tick,repeat=True)
+        self.start_layout_restore()
         g.later(40,self.reveal_selected_hours)
         if auto_catalog and controller.catalog is None and (controller.auth_dir/'session.json').exists():
             g.later(250,lambda:self.action('catalog'))
@@ -102,7 +110,7 @@ class GtkDesktop:
 
     # ==========================================
     # Function: Pack a child with explicit expansion semantics.
-    # Method: Avoid accidental expansion of fixed monitor panels or title controls.
+    # Method: Keep row expansion explicit while native paned widgets own workspace region sizes.
     # ==========================================
     def pack(self, parent, child, expand=False):
         self.g.gtk_box_pack_start(parent,child,expand,True,0)
@@ -329,50 +337,144 @@ class GtkDesktop:
         g.later(25,self.reveal_selected_hours)
 
     # ==========================================
-    # Function: Expose persistent right-panel font controls independently of booking settings.
-    # Method: Load one small presentation-only preference file and scope CSS to this workspace and its composer.
+    # Function: Restore application typography and pane positions independently of booking settings.
+    # Method: Read the existing presentation file once and scope CSS to this window and its floating composer.
     # ==========================================
-    def build_display_controls(self):
+    def load_display_preferences(self):
         g=self.g
         self.ui_path=self.controller.config_path.parent/'desktop-ui.json'
         try:
-            value=json.loads(self.ui_path.read_text(encoding='utf-8')).get('font_size',13)
+            self.ui_preferences=json.loads(self.ui_path.read_text(encoding='utf-8'))
+            if not isinstance(self.ui_preferences,dict):
+                self.ui_preferences={}
         except (OSError,ValueError,AttributeError):
-            value=13
+            self.ui_preferences={}
+        value=self.ui_preferences.get('font_size',13)
+        if not isinstance(self.ui_preferences.get('panes'),dict):
+            self.ui_preferences['panes']={}
         self.font_size=value if type(value) is int and 11<=value<=20 else 13
         self.font_scope='workbench-'+format(self.window,'x')
-        for widget in (self.w['main'],self.builder_popover):
+        for widget in (self.window,self.builder_popover):
             g.style(widget,self.font_scope)
-        toolbar=self.box(spacing=5)
-        self.pack(toolbar,self.label('目标详情 · 备选按优先级执行','caption'),True)
-        self.pack(toolbar,self.label('字号','caption'))
-        self.font_down=self.pack(toolbar,self.button('A−',lambda:self.set_font_size(self.font_size-1),'icon'))
-        self.font_label=self.pack(toolbar,self.label('','caption'))
-        self.font_up=self.pack(toolbar,self.button('A＋',lambda:self.set_font_size(self.font_size+1),'icon'))
-        self.pack(self.w['main'],toolbar)
-        reorder=g.libs['gtk'].gtk_box_reorder_child
-        reorder.argtypes,reorder.restype=[P,P,I],None
-        reorder(self.w['main'],toolbar,1)
         self.set_font_size(self.font_size,persist=False)
 
     # ==========================================
-    # Function: Resize right-panel typography without altering goals or interrupting monitoring.
-    # Method: Replace scoped CSS in place, keep readable heading/caption proportions and persist only the view preference.
+    # Function: Resize all application text without altering goals or interrupting monitoring.
+    # Method: Apply the same scoped provider to the sidebar, workbench, popover and every owned dialog.
     # ==========================================
     def set_font_size(self, value, persist=True):
         g=self.g
         self.font_size=max(11,min(20,int(value)))
         scope='.'+self.font_scope
         rules=[f'{scope}, {scope} * {{ font-size: {self.font_size}px; }}']
-        for name,offset in [('caption',-2),('muted',-1),('page-title',10),('section-title',1),
-                            ('mode',-2),('badge',-2),('choice',-1),('inventory-cell',-2),('log-text',-2)]:
+        for name,offset in [('caption',-2),('muted',-1),('page-title',10),('section-title',1),('brand',8),
+                            ('mode',-2),('badge',-2),('choice',-1),('inventory-cell',-2),('log-text',-2),
+                            ('goal-name',-1),('legend-running',-3),('legend-recurring',-3),('legend-planned',-3)]:
             rules.append(f'{scope} .{name}, {scope} .{name} * {{ font-size: {max(10,self.font_size+offset)}px; }}')
         self.font_provider=g.css_text('\n'.join(rules),self.font_provider)
-        g.label(self.font_label,f'{self.font_size} px')
-        g.gtk_widget_set_sensitive(self.font_down,self.font_size>11)
-        g.gtk_widget_set_sensitive(self.font_up,self.font_size<20)
+        if self.font_spin and g.gtk_spin_button_get_value_as_int(self.font_spin)!=self.font_size:
+            g.gtk_spin_button_set_value(self.font_spin,self.font_size)
+        self.ui_preferences['font_size']=self.font_size
         if persist:
-            private_json(self.ui_path,{'font_size':self.font_size})
+            self.persist_display_preferences()
+
+    # ==========================================
+    # Function: Register native draggable dividers for column widths and independent card heights.
+    # Method: Observe GtkPaned positions without intercepting pointer events or touching reservation data.
+    # ==========================================
+    def bind_layout(self):
+        self.panes={name:self.w[name] for name in ('layout','workspace_split','monitoring','log_split','inventory_split')}
+        captions={'layout':'拖动调整左栏宽度','workspace_split':'上下拖动调整目标区与底部面板高度',
+                  'monitoring':'左右拖动调整执行记录与空位监测宽度',
+                  'log_split':'拖动底边调整执行记录高度','inventory_split':'拖动底边调整空位监测高度'}
+        for name,pane in self.panes.items():
+            self.g.gtk_widget_set_tooltip_text(pane,captions[name].encode())
+            self.g.connect(pane,'notify::position',lambda *_,key=name:self.remember_pane(key),count=3)
+
+    # ==========================================
+    # Function: Begin a staged restore after GTK has allocated the window's real size.
+    # Method: Cancel earlier restoration work and let parent dividers settle before their nested panes.
+    # ==========================================
+    def start_layout_restore(self, use_saved=True):
+        if self.layout_restore_timer:
+            self.g.cancel(self.layout_restore_timer)
+        if self.layout_save_timer:
+            self.g.cancel(self.layout_save_timer)
+            self.layout_save_timer=None
+        self._layout_ready=False
+        self._layout_phase=0
+        self._layout_use_saved=use_saved
+        self.layout_restore_timer=self.g.later(40,self.restore_layout,repeat=True)
+
+    # ==========================================
+    # Function: Restore native geometry from outer columns down to individual card heights.
+    # Method: Wait a layout turn between hierarchy levels so parent resizing cannot redistribute restored child positions.
+    # ==========================================
+    def restore_layout(self):
+        if self.destroyed or self._layout_ready:
+            return False
+        g=self.g
+        height=g.gtk_widget_get_allocated_height(self.w['workspace_split'])
+        width=g.gtk_widget_get_allocated_width(self.w['monitoring'])
+        if height<100 or width<100:
+            return True
+        target=max(160,height-250)
+        defaults={'layout':278,'workspace_split':target,'monitoring':width//2,
+                  'log_split':max(120,g.gtk_widget_get_allocated_height(self.w['log_split'])-8),
+                  'inventory_split':max(140,g.gtk_widget_get_allocated_height(self.w['inventory_split'])-8)}
+        levels=[('layout','workspace_split'),('monitoring',),('log_split','inventory_split')]
+        self._restoring_layout=True
+        try:
+            for name in levels[self._layout_phase]:
+                pane=self.panes[name]
+                value=self.ui_preferences['panes'].get(name) if self._layout_use_saved else None
+                position=value if type(value) is int and 0<=value<=100000 else defaults[name]
+                g.gtk_paned_set_position(pane,position)
+        finally:
+            self._restoring_layout=False
+        self._layout_phase+=1
+        if self._layout_phase<len(levels):
+            return True
+        self._layout_ready=True
+        self.layout_restore_timer=None
+        if not self._layout_use_saved:
+            self.ui_preferences['panes']={name:g.gtk_paned_get_position(pane) for name,pane in self.panes.items()}
+            self.guard(self.persist_display_preferences)
+        return False
+
+    # ==========================================
+    # Function: Remember divider changes without writing a file for every mouse-motion event.
+    # Method: Cache each native position and debounce preference writes until the pointer settles.
+    # ==========================================
+    def remember_pane(self, name):
+        if not self._layout_ready or self._restoring_layout or self.destroyed:
+            return
+        self.ui_preferences['panes'][name]=self.g.gtk_paned_get_position(self.panes[name])
+        if self.layout_save_timer:
+            self.g.cancel(self.layout_save_timer)
+        self.layout_save_timer=self.g.later(250,self.flush_display_preferences)
+
+    # ==========================================
+    # Function: Commit one debounced batch of presentation preferences on the GTK thread.
+    # Method: Clear the timer before reporting any filesystem error through the ordinary inline error path.
+    # ==========================================
+    def flush_display_preferences(self):
+        self.layout_save_timer=None
+        self.guard(self.persist_display_preferences)
+
+    # ==========================================
+    # Function: Keep global font size and pane geometry in one presentation-only file.
+    # Method: Atomically write cached values without reading configuration or querying destroyed widgets.
+    # ==========================================
+    def persist_display_preferences(self):
+        private_json(self.ui_path,self.ui_preferences)
+
+    # ==========================================
+    # Function: Recover a readable default layout while keeping the selected global font.
+    # Method: Reapply native default positions, then persist all resulting pane values together.
+    # ==========================================
+    def reset_layout(self):
+        self.start_layout_restore(use_saved=False)
 
     # ==========================================
     # Function: Build one independently collapsible native workbench module.
@@ -1095,8 +1197,10 @@ class GtkDesktop:
             g.gtk_widget_set_sensitive(button,editable)
         g.gtk_widget_set_sensitive(self.name_entry,editable)
         g.gtk_widget_set_sensitive(self.date_entry,editable and not self.model.repeating())
-        for name in ['save','start','settings','new_goal','login','goal_up','goal_down']:
+        for name in ['save','start','new_goal','login','goal_up','goal_down']:
             g.gtk_widget_set_sensitive(self.w[name],not busy)
+        g.gtk_widget_set_sensitive(self.w['settings'],True)
+        self.set_settings_busy()
         for key,(row,name,detail,plus,delete) in self.sidebar_rows.items():
             g.gtk_widget_set_sensitive(plus,not busy)
             g.gtk_widget_set_sensitive(delete,not busy)
@@ -1159,6 +1263,7 @@ class GtkDesktop:
     def child_window(self, title, width, height):
         g=self.g
         window=g.gtk_window_new(0)
+        g.style(window,self.font_scope)
         g.gtk_window_set_title(window,b'AutoReserve')
         g.gtk_window_set_transient_for(window,self.window)
         g.gtk_window_set_default_size(window,width,height)
@@ -1174,37 +1279,51 @@ class GtkDesktop:
         return window,body,header
 
     # ==========================================
-    # Function: Present secondary execution controls in a native close-only settings window.
-    # Method: Keep draft settings local until Save succeeds; configure CSD before the first show.
+    # Function: Present global typography/layout controls alongside protected execution settings.
+    # Method: Apply display choices immediately and keep booking edits disabled during active work.
     # ==========================================
     def open_settings(self):
-        self.editing()
         if self.settings_window:
             self.g.gtk_window_present(self.settings_window)
             return
-        self.commit_current()
+        if not self.controller.busy and not self.saving:
+            self.commit_current()
         g=self.g
-        window,body,header=self.child_window('执行设置',570,610)
+        window,body,header=self.child_window('设置',650,620)
         self.settings_window,self.settings_header=window,header
         self.settings_fields={}
-        self.pack(body,self.label('所有目标共用执行参数，重复星期在各自工作台中设置。','muted',wrap=True))
+        content=self.box(True,14)
+        self.pack(body,self.scroller(content,160),True)
+        self.pack(content,self.label('界面设置','section-title'))
+        self.pack(content,self.label('字号作用于整个程序。字号与拖动后的布局自动保存，不影响预约参数。','caption',wrap=True))
+        display=self.pack(content,self.box(spacing=16))
+        self.pack(display,self.label('全局字号 / px'),True)
+        self.font_spin=g.gtk_spin_button_new_with_range(11,20,1)
+        g.gtk_spin_button_set_value(self.font_spin,self.font_size)
+        self.pack(display,self.font_spin)
+        g.connect(self.font_spin,'value-changed',lambda widget,*_:self.guard(
+            lambda:self.set_font_size(g.gtk_spin_button_get_value_as_int(widget))))
+        self.pack(display,self.button('恢复默认布局',self.reset_layout,'secondary'))
+        self.pack(content,self.label('执行设置','section-title'))
+        self.pack(content,self.label('运行中可调整界面；修改预约参数前请先停止监测。','muted',wrap=True))
         specs=[('普通目标启动时间 · 北京时间，留空立即','start_at'),('全局读取间隔 / 秒','poll_interval_seconds'),
                ('额外随机延迟 / %','poll_jitter_ratio'),('异常退避上限 / 秒','backoff_max_seconds'),
                ('单个订单金额上限 / 元 · 0 为无上限','max_total_price'),('普通模式监测时长 / 秒 · 0 为无上限','max_poll_seconds')]
         for caption,key in specs:
             value=self.model.data[key]
             value=value*100 if key=='poll_jitter_ratio' else value if value is not None else ''
-            control=self.entry(value,width=18)
+            control=self.entry(value,width=12)
             self.settings_fields[key]=control
-            row=self.pack(body,self.box(spacing=20))
+            row=self.pack(content,self.box(spacing=20))
             self.pack(row,self.label(caption),True)
             self.pack(row,control)
         for caption,key,invert in [('全部目标完成后停止','monitor_until_complete',False),('显示预约浏览器','headless',True)]:
             control=g.gtk_check_button_new_with_label(caption.encode())
             g.gtk_toggle_button_set_active(control,not self.model.data[key] if invert else self.model.data[key])
-            self.pack(body,control)
+            self.pack(content,control)
             self.settings_fields[key]=control
-        self.settings_save=self.pack(body,self.button('保存设置',self.apply_settings,'primary'))
+        self.settings_save=self.pack(body,self.button('保存执行设置',self.apply_settings,'primary'))
+        self.set_settings_busy()
         g.connect(window,'destroy',lambda *_:self.settings_destroyed())
         g.gtk_widget_show_all(window)
         g.gtk_window_present(window)
@@ -1216,6 +1335,18 @@ class GtkDesktop:
     def settings_destroyed(self):
         self.settings_window=None
         self.settings_fields={}
+        self.font_spin=None
+
+    # ==========================================
+    # Function: Keep display settings accessible while reservation parameters are locked.
+    # Method: Toggle only booking fields and their save action, leaving global font and layout controls interactive.
+    # ==========================================
+    def set_settings_busy(self):
+        if self.settings_window:
+            editable=not self.controller.busy and not self.saving
+            for widget in self.settings_fields.values():
+                self.g.gtk_widget_set_sensitive(widget,editable)
+            self.g.gtk_widget_set_sensitive(self.settings_save,editable)
 
     # ==========================================
     # Function: Validate child-window settings before applying them to the shared workspace.
@@ -1239,7 +1370,7 @@ class GtkDesktop:
         self.save()
 
     # ==========================================
-    # Function: Display recent logs continuously in the fixed execution-record card.
+    # Function: Display recent logs continuously in the resizable execution-record card.
     # Method: Keep exactly the latest fifty logical lines and always follow the newest line after native layout.
     # ==========================================
     def render_logs(self):
@@ -1267,7 +1398,7 @@ class GtkDesktop:
         g.later(25,settle)
 
     # ==========================================
-    # Function: Keep live availability visible in a separate fixed native card.
+    # Function: Keep live availability visible in its independently resizable native card.
     # Method: Repaint only changed in-memory snapshots; never request availability from UI rendering.
     # ==========================================
     def render_inventory(self, shot):
@@ -1470,6 +1601,16 @@ class GtkDesktop:
     # ==========================================
     def on_destroy(self):
         self.destroyed=True
+        if self.layout_restore_timer:
+            self.g.cancel(self.layout_restore_timer)
+            self.layout_restore_timer=None
+        if self.layout_save_timer:
+            self.g.cancel(self.layout_save_timer)
+            self.layout_save_timer=None
+            try:
+                self.persist_display_preferences()
+            except OSError as exc:
+                print('界面布局保存失败：'+str(exc),file=sys.stderr)
         if self.font_provider:
             self.g.gtk_style_context_remove_provider_for_screen(self.g.gdk_screen_get_default(),self.font_provider)
             self.g.g_object_unref(self.font_provider)
