@@ -1,0 +1,18 @@
+include README.md README-CN.md LICENSE requirements.txt pyproject.toml MANIFEST.in
+include run.sh start-gui.sh test.sh .gitignore .gitattributes
+recursive-include autoreserve *.py *.ui *.css *.svg *.js *.html
+recursive-include native *.c *.cs *.json *.manifest
+recursive-include scripts *.py
+recursive-include tools *.py
+recursive-include tests *.py
+recursive-include demo *.py *.html
+recursive-include docs *.md
+include config/README.md config/example.json config/.gitignore
+recursive-include .github *.yml
+prune .auth
+prune artifacts
+prune .research
+prune .runtime
+prune .venv
+prune config/artifacts
+global-exclude *.py[cod] __pycache__ *.log

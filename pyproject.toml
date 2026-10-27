@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sjtu-autoreserve"
+dynamic = ["version"]
+description = "A native GTK reservation workspace for SJTU sports facilities"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{name = "AutoReserve contributors"}]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: Microsoft :: Windows",
+  "Environment :: X11 Applications :: GTK",
+]
+dependencies = [
+  "playwright==1.64.1",
+  "pyee==14.0.0",
+  "greenlet==3.5.6",
+  "typing_extensions==4.16.0",
+  "tzdata==2026.5; sys_platform == 'win32'",
+]
+
+[project.scripts]
+autoreserve = "autoreserve.__main__:entrypoint"
+
+[tool.setuptools.dynamic]
+version = {attr = "autoreserve.__version__"}
+
+[tool.setuptools.packages.find]
+include = ["autoreserve*"]
+
+[tool.setuptools.package-data]
+autoreserve = ["gtk_ui/*.ui", "gtk_ui/*.css", "gtk_ui/*.svg", "ui/*.html", "ui/*.css", "ui/*.js"]

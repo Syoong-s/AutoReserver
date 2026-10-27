@@ -1,0 +1,119 @@
+name: Test, build and release AutoReserve
+
+on:
+  push:
+    tags: ['v[0-9]*.[0-9]*.[0-9]*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: autoreserve-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      GDK_BACKEND: x11
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Install hosted Linux runtime and test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-0t64 python3-tk fonts-noto-cjk xvfb dbus-x11
+          python -m pip install -r requirements.txt 'setuptools>=77' build
+          python -m playwright install --with-deps chromium
+      - name: Validate release version
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python -c "import os; from autoreserve import __version__; assert os.environ['RELEASE_TAG'] == 'v' + __version__, 'Version tag does not match the application'"
+      - name: Syntax and local-only tests
+        run: |
+          python -m compileall -q autoreserve scripts tools tests demo
+          bash -n run.sh start-gui.sh test.sh
+          dbus-run-session -- xvfb-run -a ./test.sh
+      - name: Build Python package and portable Linux archives
+        run: |
+          python -m build
+          python tools/release.py
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: autoreserve-release
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 30
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.14'
+      - name: Validate Windows release version
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python -c "import os; from autoreserve import __version__; assert os.environ['RELEASE_TAG'] == 'v' + __version__"
+      - name: Build private Windows runtime and EXE
+        run: python tools/build_windows.py
+      - name: Exercise native GTK and local Chromium through the EXE
+        run: |
+          @'
+          from pathlib import Path
+          import json, subprocess
+          from autoreserve import __version__
+          root = Path('.runtime/windows-build') / ('AutoReserve-' + __version__)
+          result = subprocess.run([str((root/'AutoReserve.exe').resolve()), '--self-test'], timeout=900)
+          assert result.returncode == 0, (root/'.runtime/logs/windows-launch.log').read_text(encoding='utf-8')
+          report = json.loads((root/'.runtime/logs/windows-smoke.json').read_text(encoding='utf-8'))
+          assert report['status'] == 'passed' and report['platform'] == 'win32'
+          '@ | python -
+      - name: Upload Windows portable package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: autoreserve-windows
+          path: dist/*-windows-*.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [build, windows]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: autoreserve-*
+          merge-multiple: true
+          path: dist
+      - name: Combine checksums for both operating systems
+        run: |
+          cd dist
+          sha256sum *.tar.gz *.zip *.whl > SHA256SUMS
+      - name: Publish tagged release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release create "$RELEASE_TAG" dist/* --verify-tag --title "AutoReserve $RELEASE_TAG" --generate-notes

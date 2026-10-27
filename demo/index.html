@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>自动预约本地模拟页</title>
+  <style>
+    body { margin: 24px; font: 16px system-ui,sans-serif; color: #303640; background: #f5f7fa; }
+    h1 { font-size: 22px; } button, [role=tab] { cursor: pointer; }
+    .topDiv { background: white; padding: 16px; border-radius: 12px; }
+    .el-tabs__header { display: flex; gap: 12px; padding: 12px; }
+    .el-tabs__item { padding: 10px; border-bottom: 2px solid transparent; }
+    .is-active { color: #409eff; border-color: #409eff; }
+    .schedule { display: flex; gap: 16px; padding: 24px; background: white; }
+    ul { list-style: none; padding: 0; margin: 0; }
+    .leftUl { padding-top: 32px; } .leftUl li { height: 44px; }
+    .tables { position: relative; width: 340px; }
+    .inner-seat-wrapper > ul { display: flex; height: 32px; }
+    .topsiteStyle { width: 130px; }
+    .inner-seat-wrapper > div { display: flex; height: 44px; }
+    .seat { width: 130px; } .inner-seat { margin: 2px; width: 80px; height: 36px; border-radius: 6px; text-align: center; line-height: 36px; }
+    .bought-seat { background: #f1f3f5; color: #aaa; cursor: default; }
+    .unselected-seat { background: #c9e3ff; color: #409eff; cursor: pointer; }
+    .selected-seat { background: #00b578; color: white; cursor: pointer; }
+    .drawerStyle { min-width: 350px; border-left: 1px solid #ddd; padding: 20px; }
+    .textrow { padding: 8px 0; } .butMoney { margin-top: 32px; }
+    button { padding: 12px 24px; border: 0; border-radius: 6px; background: #409eff; color: white; }
+    .el-dialog { position: fixed; z-index: 5; left: 20%; top: 12%; width: 55%; padding: 30px; background: white; border: 1px solid #ddd; box-shadow: 0 0 0 100vmax #0007; border-radius: 14px; }
+    .dialog-footer { margin-top: 24px; } .el-dialog button { margin-top: 24px; }
+    .el-loading-mask { position: absolute; inset: 0; background: white; }
+    #order-success { padding: 24px; color: #009966; }
+  </style>
+</head>
+<body>
+<h1>本地仿真：此页面不会向交大网站发送请求</h1>
+<p>蓝色为可用，绿色为选中，灰色不可用。可用时段：14:00–16:00。</p>
+<div id="apointmentDetails">
+  <div class="topDiv"><div class="texts"><h3>模拟健身中心</h3></div></div>
+  <div class="lists">
+    <div class="el-tabs"><div class="el-tabs__header"><div class="el-tabs__item is-active" role="tab">健身房</div></div></div>
+    <div class="chart">
+      <div id="dates" class="el-tabs__header"></div>
+      <div class="schedule">
+        <ul class="leftUl"></ul>
+        <div class="tables"><div class="inner-seat-wrapper"></div><div class="el-loading-mask" style="display:none">加载中</div></div>
+        <div class="drawerStyle">
+          <div class="drawerText"><h3>健身房场地</h3><h2></h2><div id="selected"></div></div>
+          <div class="butMoney"><span>实际金额：￥0元</span><button type="button" id="order">立即下单</button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="el-dialog" role="dialog" style="display:none">
+    <h2>预订须知</h2><p>这是本地测试的预约协议示例。</p>
+    <div class="dialog-footer"><label><input type="checkbox">本人已认真阅读、充分了解并自愿接受上述规定。</label><br>
+      <button id="back">上一步</button><button id="submit">提交订单</button></div>
+  </div>
+</div>
+<div class="verifybox" style="display:none"><p>模拟人工安全验证</p><button id="verify">完成模拟验证</button></div>
+<div id="order-success" style="display:none">订单已提交，尚未付款。<button id="pay">立即支付</button></div>
+<script>
+let activeDate, selected = [], submitClicks = 0, payClicks = 0, inventoryRequests = 0, calendarRequests = 0;
+const params = new URLSearchParams(location.search);
+const scenario = params.get('scenario') || 'success';
+document.querySelector('.topDiv .texts h3').textContent = params.get('venue') || '模拟健身中心';
+document.querySelector('.lists > .el-tabs .el-tabs__item').textContent = params.get('sport') || '健身房';
+let sportReady = scenario !== 'sport-switch';
+const price = Number(params.get('price') || 0);
+const days = Array.from({length: 7}, (_, i) => {
+  const d = new Date(); d.setDate(d.getDate() + i);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+});
+activeDate = days[0];
+// ==========================================
+// Function: Create canonical hour labels.
+// Method: Format one grid row and its following hour.
+// ==========================================
+function slot(row) { return `${String(row+7).padStart(2,'0')}:00-${String(row+8).padStart(2,'0')}:00`; }
+// ==========================================
+// Function: Update visible selection and price.
+// Method: Render one summary row for each selected cell.
+// ==========================================
+function summary() {
+  document.querySelector('.drawerText h2').textContent = activeDate + ' 星期一';
+  document.querySelector('#selected').innerHTML = selected.map(s => `<div class="textrow">场地${s.col+1} ${slot(s.row)} ×1 ￥${price}元</div>`).join('');
+  document.querySelector('.butMoney > span').textContent = `实际金额：￥${price * selected.length}元`;
+}
+// ==========================================
+// Function: Render a date's availability grid.
+// Method: Reproduce hourly cells, including stale availability during a sport switch.
+// ==========================================
+function render() {
+  const wrapper = document.querySelector('.inner-seat-wrapper');
+  wrapper.innerHTML = '<ul><li class="topsiteStyle" title="场地1">场地1</li><li class="topsiteStyle" title="场地2">场地2</li></ul>';
+  for (let row = 0; row < 15; row++) {
+    const line = document.createElement('div'); line.className = 'clearfix';
+    for (let col = 0; col < 2; col++) {
+      const outer = document.createElement('div'); outer.className = 'seat';
+      const inner = document.createElement('div');
+      const available = sportReady && (row === 7 || row === 8) && scenario !== 'soldout' &&
+        !(scenario === 'first-date-soldout' && activeDate === days[0]);
+      inner.className = 'inner-seat ' + (available ? 'unselected-seat' : 'bought-seat');
+      inner.textContent = '◆';
+      // ==========================================
+      // Function: Select a mock cell through a real DOM click.
+      // Method: Toggle selection while respecting disabled cells and simulated limits.
+      // ==========================================
+      inner.onclick = () => {
+        if (!available) return;
+        if (inner.classList.contains('selected-seat')) {
+          selected = selected.filter(s => s.row !== row || s.col !== col);
+          inner.className = 'inner-seat unselected-seat';
+        } else {
+          if (scenario === 'limit') {
+            selected = [];
+            document.querySelectorAll('.selected-seat').forEach(e => e.className = 'inner-seat unselected-seat');
+          }
+          selected.push({row,col}); inner.className = 'inner-seat selected-seat';
+        }
+        summary();
+      };
+      outer.append(inner); line.append(outer);
+    }
+    wrapper.append(line);
+  }
+  summary();
+}
+for (let i = 7; i <= 22; i++) {
+  const li = document.createElement('li'); li.textContent = String(i).padStart(2,'0') + ':00';
+  document.querySelector('.leftUl').append(li);
+}
+for (const value of days) {
+  const tab = document.createElement('div'); tab.role = 'tab'; tab.id = 'tab-' + value;
+  tab.className = 'el-tabs__item' + (value === activeDate ? ' is-active' : '');
+  tab.textContent = value;
+  // ==========================================
+  // Function: Simulate asynchronous date switching.
+  // Method: Clear selection, activate the tab, and briefly show the loading mask.
+  // ==========================================
+  tab.onclick = async () => {
+    activeDate = value; selected = [];
+    document.querySelectorAll('.chart [role=tab]').forEach(e => e.classList.toggle('is-active', e === tab));
+    document.querySelector('.el-loading-mask').style.display = 'block';
+    inventoryRequests++;
+    try {
+      await fetch('/manage/fieldDetail/queryFieldSituation', {
+        method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({date:value})
+      });
+    } finally {
+      setTimeout(() => { render(); document.querySelector('.el-loading-mask').style.display = 'none'; }, 40);
+    }
+  };
+  document.querySelector('#dates').append(tab);
+}
+document.querySelector('#order').onclick = () => { if (selected.length) document.querySelector('.el-dialog').style.display = 'block'; };
+document.querySelector('#back').onclick = () => document.querySelector('.el-dialog').style.display = 'none';
+// ==========================================
+// Function: Submit a local mock order.
+// Method: Use the same response shape and endpoint suffix as the real page.
+// ==========================================
+async function submit(verified = false) {
+  if (!document.querySelector('input[type=checkbox]').checked) return;
+  submitClicks++;
+  const response = await fetch('/venue/personal/ConfirmOrder', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({scenario, verified})
+  });
+  const result = await response.json();
+  document.querySelector('.el-dialog').style.display = 'none';
+  if (result.code === 1002) document.querySelector('.verifybox').style.display = 'block';
+  if (result.code === 0) {
+    sessionStorage.setItem('newOrderDetailsId', result.data);
+    document.querySelector('.verifybox').style.display = 'none';
+    document.querySelector('#order-success').style.display = 'block';
+  }
+}
+document.querySelector('#submit').onclick = () => submit();
+document.querySelector('#verify').onclick = () => submit(true);
+document.querySelector('#pay').onclick = () => { payClicks++; fetch('/venue/personal/orderImmediatelyPC', {method:'POST'}); };
+if (scenario === 'sport-switch') {
+  const gym = document.querySelector('.lists > .el-tabs .el-tabs__item');
+  const previous = document.createElement('div');
+  previous.role = 'tab'; previous.className = 'el-tabs__item is-active'; previous.textContent = '排练厅';
+  gym.classList.remove('is-active'); gym.before(previous);
+  // ==========================================
+  // Function: Reproduce the live site's calendar-then-inventory sport transition.
+  // Method: Leave the old grid unmasked while a delayed calendar request is pending.
+  // ==========================================
+  gym.onclick = async () => {
+    gym.classList.add('is-active'); previous.classList.remove('is-active');
+    calendarRequests++;
+    await fetch('/manage/fieldDetail/queryFieldReserveSituationIsFull', {
+      method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({delay:0.6})
+    });
+    document.querySelector('.el-loading-mask').style.display = 'block';
+    inventoryRequests++;
+    await fetch('/manage/fieldDetail/queryFieldSituation', {method:'POST',body:'{}'});
+    setTimeout(() => {
+      sportReady = true; render(); document.querySelector('.el-loading-mask').style.display = 'none';
+    }, 120);
+  };
+}
+render();
+</script>
+</body>
+</html>

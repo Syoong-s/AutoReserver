@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="reserve-token" content="__RESERVE_TOKEN__">
+  <title>AutoReserve · 预约工作台</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="/" aria-label="AutoReserve 首页"><span class="brand-symbol">a<span>↗</span></span><span>AutoReserve<small>你的场馆预约助手</small></span></a>
+    <div class="nav-caption">工作空间</div>
+    <a class="nav-item active" href="#workspace"><span>▦</span> 预约工作台 <span class="nav-dot"></span></a>
+    <button class="nav-item" id="historyNav"><span>◷</span> 预约结果</button>
+    <a class="nav-item" href="#activity"><span>≡</span> 执行动态</a>
+    <div class="sidebar-note"><span class="small-symbol">↗</span><strong>安排好，交给它。</strong><p>多个日期，多个备选。<br>按你的优先级逐一预约。</p></div>
+    <div class="sidebar-footer"><span class="connection-dot"></span> 本机运行 <span>v0.3</span></div>
+  </aside>
+  <div class="shell" id="workspace">
+    <header class="topbar"><span>工作空间 <span class="crumb">/</span> <strong>预约工作台</strong></span><div class="topbar-right"><span class="privacy-dot"></span> 登录信息仅保存在本机 <span class="avatar">予</span></div></header>
+    <main>
+      <div class="page-title"><div><div class="eyebrow">RESERVATION WORKSPACE</div><h1>预约工作台<span class="title-dot">.</span></h1><p>设置目标与备选顺序，剩下的交给自动预约。</p></div><div class="title-actions"><button id="loginTop" class="button secondary">↗ 登录 / 选择场馆</button><button id="saveTop" class="button primary">保存配置 <span>↗</span></button></div></div>
+      <div id="errorBox" class="notice error" role="alert" hidden></div>
+      <section class="venue-banner"><div class="venue-icon">▥</div><div><div class="venue-label">当前预约平台 <span class="mini-tag">SJTU</span></div><strong id="venueName">上海交通大学体育场馆</strong><p id="venueHint">首次使用请先登录，进入具体场馆后保存。</p></div><div class="venue-actions"><span id="loginStatus" class="pill muted">尚未登录</span><button id="captureLogin" class="button primary" hidden>保存登录 / 场馆</button></div></section>
+      <section class="stats"><article><div><span class="stat-label">预约目标</span><strong id="totalCount">0<span> 个</span></strong><p>所有未完成目标持续监测</p></div><span class="stat-icon">◎</span></article><article><div><span class="stat-label">已完成</span><strong id="doneCount">0<span> / 0</span></strong><p id="completionHint">等待开始预约</p></div><span class="stat-icon green">✓</span></article><article><div><span class="stat-label">候选组合</span><strong id="candidateCount">0<span> 组</span></strong><p>按优先级选择首个可用组合</p></div><span class="stat-icon amber">≋</span></article></section>
+      <div class="workspace-grid">
+        <section class="goals-section"><div class="section-heading"><div><h2>预约目标 <span class="mini-tag green-tag">多目标模式</span></h2><p>所有目标共同监测；发现空位后按优先级下单。</p></div><button id="addGoal" class="button secondary compact">＋ 添加日期目标</button></div><div id="goals"></div><div id="emptyGoals" class="empty" hidden><strong>把想预约的日期添加进来</strong><p>每个日期可选多个时段和场地作为备选。</p><button id="emptyAdd" class="button primary">＋ 添加第一个目标</button></div>
+        <section class="activity-card" id="activity"><div class="section-heading"><h2>执行动态</h2><span id="activityTag" class="pill muted">待命</span></div><div id="runMessage" class="run-message">配置完成后，先预览，再开始预约。</div><div id="logs" class="logs"><p class="log-empty">执行记录会显示在这里</p></div></section></section>
+        <aside class="settings-column"><section class="settings-card"><div class="section-heading"><h2>执行设置</h2><span>⚙</span></div><label class="field-label" for="startAt">启动时间 <span>北京时间 UTC+8</span></label><input id="startAt" type="datetime-local" step="1"><p class="field-hint">留空立即开始；定时前会提前加载预约页。</p><div class="field-row"><div><label class="field-label" for="pollInterval">全局读取间隔</label><div class="suffix-input"><input id="pollInterval" type="number" min="5" max="3600" step="1" value="15"><span>秒</span></div></div><div><label class="field-label" for="maxPrice">单个订单上限</label><div class="suffix-input"><span>¥</span><input id="maxPrice" type="number" min="0" step="0.01" value="0"></div></div></div><p class="field-hint">所有日期共用此间隔，同一日期的目标共享一次读取。</p><details class="monitor-options"><summary>监测频率保护</summary><div class="field-row"><div><label class="field-label" for="jitterPercent">额外随机延迟</label><div class="suffix-input"><input id="jitterPercent" type="number" min="0" max="100" value="20"><span>%</span></div></div><div><label class="field-label" for="maxBackoff">异常退避上限</label><div class="suffix-input"><input id="maxBackoff" type="number" min="30" max="3600" value="600"><span>秒</span></div></div></div><p class="field-hint">429/503 自动退避并遵守服务器等待时间；403 暂停监测。间隔不能保证免于网站限制。</p></details><p class="field-hint" id="monitorHint" role="status">默认每次读取至少间隔 15 秒，并增加 0–20% 随机延迟。</p><label class="switch-row"><span><strong>全部完成后停止</strong><small>持续检查未完成的日期目标</small></span><input id="untilComplete" type="checkbox" checked><span class="switch"></span></label><div id="timeLimitField" hidden><label class="field-label" for="maxPoll">单轮监测时长（秒）</label><input id="maxPoll" type="number" min="1" max="86400" value="300"></div><label class="switch-row"><span><strong>显示预约浏览器</strong><small>需要验证时可直接手动完成</small></span><input id="showBrowser" type="checkbox" checked><span class="switch"></span></label><div class="stop-note"><span>✓</span><div><strong>提交订单即完成</strong><p>不执行付款；已完成目标保留进度。</p></div></div><button id="preview" class="button secondary full">◎ 预览全部目标</button><button id="start" class="button primary full large">开始预约 <span>→</span></button><button id="stop" class="button danger full" hidden>停止任务</button><p class="start-hint" id="saveHint">首次运行建议先预览，确认场地与时段。</p></section>
+        <section class="availability-card"><div class="section-heading"><h2>当前空位</h2><button id="refreshSlots" class="text-button">↻ 刷新</button></div><input id="scanDate" type="date" aria-label="查看空位日期"><div class="legend"><span><i class="available"></i> 可预约</span><span><i></i> 不可预约</span></div><div id="availability" class="availability-empty">登录并选择场馆后<br>可读取场地和时段。</div><p class="field-hint">空位仅为最近一次读取结果，提交前会再次核对。</p></section></aside>
+      </div>
+      <footer class="page-footer"><span><span class="connection-dot"></span> LOCAL WORKSPACE</span><span>按配置选择 · 原生页面提交 · 成功进度持久保存</span></footer>
+    </main>
+  </div>
+  <div id="toast" class="toast" role="status" hidden></div>
+  <dialog id="resultsDialog"><div class="section-heading"><h2>预约结果</h2><button id="closeResults" class="icon-button" aria-label="关闭预约结果">×</button></div><div id="resultsContent"></div></dialog>
+</body>
+</html>

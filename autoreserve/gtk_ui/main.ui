@@ -1,0 +1,539 @@
+<interface>
+  <requires lib="gtk+" version="3.24" />
+  <object class="GtkWindow" id="window">
+    <property name="title">AutoReserve</property>
+    <property name="default-width">1380</property>
+    <property name="default-height">980</property>
+    <property name="width-request">1100</property>
+    <property name="height-request">790</property>
+    <style>
+      <class name="reserve-window" />
+    </style>
+    <child type="titlebar">
+      <object class="GtkHeaderBar" id="header">
+        <property name="title">AutoReserve</property>
+        <property name="show-close-button">True</property>
+        <property name="decoration-layout">:minimize,maximize,close</property>
+        <style>
+          <class name="reserve-header" />
+        </style>
+      </object>
+    </child>
+    <child>
+      <object class="GtkBox" id="layout">
+        <child>
+          <object class="GtkBox" id="sidebar">
+            <property name="orientation">vertical</property>
+            <property name="width-request">258</property>
+            <property name="spacing">14</property>
+            <property name="margin">18</property>
+            <property name="hexpand">False</property>
+            <property name="hexpand-set">True</property>
+            <style>
+              <class name="sidebar" />
+            </style>
+            <child>
+              <object class="GtkLabel">
+                <property name="label">AutoReserve</property>
+                <property name="xalign">0</property>
+                <property name="margin-top">9</property>
+                <style>
+                  <class name="brand" />
+                </style>
+              </object>
+              <packing>
+                <property name="expand">False</property>
+                <property name="fill">True</property>
+              </packing>
+            </child>
+            <child>
+              <object class="GtkButton" id="new_goal">
+                <property name="label">＋  新建预约目标</property>
+                <property name="margin-top">10</property>
+                <style>
+                  <class name="secondary" />
+                </style>
+              </object>
+              <packing>
+                <property name="expand">False</property>
+                <property name="fill">True</property>
+              </packing>
+            </child>
+            <child>
+              <object class="GtkLabel" id="goal_count">
+                <property name="label">预约目标</property>
+                <property name="xalign">0</property>
+                <property name="margin-top">4</property>
+                <style>
+                  <class name="caption" />
+                </style>
+              </object>
+              <packing>
+                <property name="expand">False</property>
+                <property name="fill">True</property>
+              </packing>
+            </child>
+            <child>
+              <object class="GtkScrolledWindow" id="goal_scroll">
+                <property name="hscrollbar-policy">never</property>
+                <property name="vscrollbar-policy">automatic</property>
+                <property name="overlay-scrolling">False</property>
+                <property name="vexpand">True</property>
+                <child>
+                  <object class="GtkListBox" id="goals">
+                    <property name="selection-mode">single</property>
+                    <property name="activate-on-single-click">True</property>
+                    <style>
+                      <class name="goal-list" />
+                    </style>
+                  </object>
+                </child>
+              </object>
+              <packing>
+                <property name="expand">True</property>
+                <property name="fill">True</property>
+              </packing>
+            </child>
+            <child>
+              <object class="GtkBox">
+                <property name="spacing">8</property>
+                <child>
+                  <object class="GtkButton" id="goal_up">
+                    <property name="label">↑</property>
+                    <property name="tooltip-text">提高目标优先级</property>
+                    <style>
+                      <class name="icon" />
+                    </style>
+                  </object>
+                  <packing>
+                    <property name="expand">False</property>
+                    <property name="fill">True</property>
+                  </packing>
+                </child>
+                <child>
+                  <object class="GtkButton" id="goal_down">
+                    <property name="label">↓</property>
+                    <property name="tooltip-text">降低目标优先级</property>
+                    <style>
+                      <class name="icon" />
+                    </style>
+                  </object>
+                  <packing>
+                    <property name="expand">False</property>
+                    <property name="fill">True</property>
+                  </packing>
+                </child>
+                <child>
+                  <object class="GtkLabel">
+                    <property name="label">＋ 次日 · × 删除</property>
+                    <property name="hexpand">True</property>
+                    <property name="xalign">1</property>
+                    <style>
+                      <class name="caption" />
+                    </style>
+                  </object>
+                  <packing>
+                    <property name="expand">False</property>
+                    <property name="fill">True</property>
+                  </packing>
+                </child>
+              </object>
+              <packing>
+                <property name="expand">False</property>
+                <property name="fill">True</property>
+              </packing>
+            </child>
+            <child>
+              <object class="GtkSeparator">
+                <property name="margin-top">6</property>
+                <property name="margin-bottom">6</property>
+              </object>
+              <packing>
+                <property name="expand">False</property>
+                <property name="fill">True</property>
+              </packing>
+            </child>
+            <child>
+              <object class="GtkButton" id="settings">
+                <property name="label">执行设置</property>
+                <style>
+                  <class name="secondary" />
+                </style>
+              </object>
+              <packing>
+                <property name="expand">False</property>
+                <property name="fill">True</property>
+              </packing>
+            </child>
+            <child>
+              <object class="GtkLabel" id="auth">
+                <property name="label">尚未登录</property>
+                <property name="xalign">0</property>
+                <property name="wrap">True</property>
+                <style>
+                  <class name="caption" />
+                </style>
+              </object>
+              <packing>
+                <property name="expand">False</property>
+                <property name="fill">True</property>
+              </packing>
+            </child>
+            <child>
+              <object class="GtkButton" id="login">
+                <property name="label">登录 / 重新登录</property>
+                <style>
+                  <class name="secondary" />
+                </style>
+              </object>
+              <packing>
+                <property name="expand">False</property>
+                <property name="fill">True</property>
+              </packing>
+            </child>
+          </object>
+          <packing>
+            <property name="expand">False</property>
+            <property name="fill">True</property>
+          </packing>
+        </child>
+        <child>
+          <object class="GtkBox" id="main">
+            <property name="orientation">vertical</property>
+            <property name="spacing">14</property>
+            <property name="margin-start">8</property>
+            <property name="margin-end">24</property>
+            <property name="margin-top">20</property>
+            <property name="margin-bottom">16</property>
+            <child>
+              <object class="GtkBox">
+                <property name="spacing">10</property>
+                <child>
+                  <object class="GtkBox">
+                    <property name="orientation">vertical</property>
+                    <property name="spacing">6</property>
+                    <property name="hexpand">True</property>
+                    <child>
+                      <object class="GtkLabel">
+                        <property name="label">预约工作台</property>
+                        <property name="xalign">0</property>
+                        <style>
+                          <class name="page-title" />
+                        </style>
+                      </object>
+                      <packing>
+                        <property name="expand">False</property>
+                        <property name="fill">True</property>
+                      </packing>
+                    </child>
+                    <child>
+                      <object class="GtkLabel" id="summary">
+                        <property name="xalign">0</property>
+                        <style>
+                          <class name="caption" />
+                        </style>
+                      </object>
+                      <packing>
+                        <property name="expand">False</property>
+                        <property name="fill">True</property>
+                      </packing>
+                    </child>
+                  </object>
+                  <packing>
+                    <property name="expand">True</property>
+                    <property name="fill">True</property>
+                  </packing>
+                </child>
+                <child>
+                  <object class="GtkButton" id="capture">
+                    <property name="label">保存登录</property>
+                    <property name="no-show-all">True</property>
+                    <property name="valign">center</property>
+                    <style>
+                      <class name="primary" />
+                    </style>
+                  </object>
+                  <packing>
+                    <property name="expand">False</property>
+                    <property name="fill">True</property>
+                  </packing>
+                </child>
+                <child>
+                  <object class="GtkButton" id="stop">
+                    <property name="label">停止监测</property>
+                    <property name="no-show-all">True</property>
+                    <property name="valign">center</property>
+                    <style>
+                      <class name="secondary" />
+                    </style>
+                  </object>
+                  <packing>
+                    <property name="expand">False</property>
+                    <property name="fill">True</property>
+                  </packing>
+                </child>
+                <child>
+                  <object class="GtkButton" id="save">
+                    <property name="label">保存设置</property>
+                    <property name="valign">center</property>
+                    <style>
+                      <class name="secondary" />
+                    </style>
+                  </object>
+                  <packing>
+                    <property name="expand">False</property>
+                    <property name="fill">True</property>
+                  </packing>
+                </child>
+                <child>
+                  <object class="GtkButton" id="start">
+                    <property name="label">开始监测  →</property>
+                    <property name="valign">center</property>
+                    <style>
+                      <class name="primary" />
+                    </style>
+                  </object>
+                  <packing>
+                    <property name="expand">False</property>
+                    <property name="fill">True</property>
+                  </packing>
+                </child>
+              </object>
+              <packing>
+                <property name="expand">False</property>
+                <property name="fill">True</property>
+              </packing>
+            </child>
+            <child>
+              <object class="GtkBox" id="error_bar">
+                <property name="spacing">10</property>
+                <property name="no-show-all">True</property>
+                <style>
+                  <class name="error-banner" />
+                </style>
+                <child>
+                  <object class="GtkLabel" id="error">
+                    <property name="xalign">0</property>
+                    <property name="wrap">True</property>
+                    <property name="hexpand">True</property>
+                  </object>
+                  <packing>
+                    <property name="expand">True</property>
+                    <property name="fill">True</property>
+                  </packing>
+                </child>
+                <child>
+                  <object class="GtkButton" id="dismiss_error">
+                    <property name="label">×</property>
+                    <style>
+                      <class name="icon" />
+                    </style>
+                  </object>
+                  <packing>
+                    <property name="expand">False</property>
+                    <property name="fill">True</property>
+                  </packing>
+                </child>
+              </object>
+              <packing>
+                <property name="expand">False</property>
+                <property name="fill">True</property>
+              </packing>
+            </child>
+            <child>
+              <object class="GtkScrolledWindow" id="editor_scroll">
+                <property name="hscrollbar-policy">never</property>
+                <property name="vscrollbar-policy">automatic</property>
+                <property name="overlay-scrolling">False</property>
+                <property name="vexpand">True</property>
+                <property name="height-request">290</property>
+                <child>
+                  <object class="GtkViewport">
+                    <child>
+                      <object class="GtkBox" id="editor">
+                        <property name="orientation">vertical</property>
+                        <property name="spacing">14</property>
+                        <property name="margin-end">8</property>
+                        <property name="margin-bottom">4</property>
+                        <style>
+                          <class name="editor-card" />
+                        </style>
+                      </object>
+                    </child>
+                  </object>
+                </child>
+              </object>
+              <packing>
+                <property name="expand">True</property>
+                <property name="fill">True</property>
+              </packing>
+            </child>
+            <child>
+              <object class="GtkBox" id="monitoring">
+                <property name="spacing">14</property>
+                <property name="homogeneous">True</property>
+                <property name="height-request">204</property>
+                <property name="vexpand">False</property>
+                <property name="vexpand-set">True</property>
+                <child>
+                  <object class="GtkBox" id="log_card">
+                    <property name="orientation">vertical</property>
+                    <property name="spacing">10</property>
+                    <style>
+                      <class name="monitor-card" />
+                    </style>
+                    <child>
+                      <object class="GtkBox">
+                        <child>
+                          <object class="GtkLabel">
+                            <property name="label">执行记录</property>
+                            <property name="xalign">0</property>
+                            <property name="hexpand">True</property>
+                            <style>
+                              <class name="section-title" />
+                            </style>
+                          </object>
+                          <packing>
+                            <property name="expand">True</property>
+                            <property name="fill">True</property>
+                          </packing>
+                        </child>
+                        <child>
+                          <object class="GtkLabel" id="run_badge">
+                            <property name="label">待命</property>
+                            <style>
+                              <class name="badge" />
+                            </style>
+                          </object>
+                          <packing>
+                            <property name="expand">False</property>
+                            <property name="fill">True</property>
+                          </packing>
+                        </child>
+                      </object>
+                      <packing>
+                        <property name="expand">False</property>
+                        <property name="fill">True</property>
+                      </packing>
+                    </child>
+                    <child>
+                      <object class="GtkScrolledWindow" id="log_scroll">
+                        <property name="hscrollbar-policy">never</property>
+                        <property name="overlay-scrolling">False</property>
+                        <property name="vexpand">True</property>
+                        <property name="height-request">128</property>
+                        <child>
+                          <object class="GtkTextView" id="logs">
+                            <property name="editable">False</property>
+                            <property name="cursor-visible">False</property>
+                            <property name="wrap-mode">word-char</property>
+                            <property name="left-margin">2</property>
+                            <property name="right-margin">6</property>
+                            <property name="pixels-below-lines">7</property>
+                            <style>
+                              <class name="log-text" />
+                            </style>
+                          </object>
+                        </child>
+                      </object>
+                      <packing>
+                        <property name="expand">True</property>
+                        <property name="fill">True</property>
+                      </packing>
+                    </child>
+                  </object>
+                  <packing>
+                    <property name="expand">True</property>
+                    <property name="fill">True</property>
+                  </packing>
+                </child>
+                <child>
+                  <object class="GtkBox" id="inventory_card">
+                    <property name="orientation">vertical</property>
+                    <property name="spacing">10</property>
+                    <style>
+                      <class name="monitor-card" />
+                    </style>
+                    <child>
+                      <object class="GtkLabel">
+                        <property name="label">空位监测</property>
+                        <property name="xalign">0</property>
+                        <style>
+                          <class name="section-title" />
+                        </style>
+                      </object>
+                      <packing>
+                        <property name="expand">False</property>
+                        <property name="fill">True</property>
+                      </packing>
+                    </child>
+                    <child>
+                      <object class="GtkLabel" id="inventory_scope">
+                        <property name="label">尚未开始监测</property>
+                        <property name="xalign">0</property>
+                        <property name="ellipsize">end</property>
+                        <style>
+                          <class name="caption" />
+                        </style>
+                      </object>
+                      <packing>
+                        <property name="expand">False</property>
+                        <property name="fill">True</property>
+                      </packing>
+                    </child>
+                    <child>
+                      <object class="GtkScrolledWindow" id="inventory_scroll">
+                        <property name="overlay-scrolling">False</property>
+                        <property name="vexpand">True</property>
+                        <property name="height-request">104</property>
+                        <child>
+                          <object class="GtkViewport">
+                            <child>
+                              <object class="GtkBox" id="inventory">
+                                <property name="orientation">vertical</property>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+                      </object>
+                      <packing>
+                        <property name="expand">True</property>
+                        <property name="fill">True</property>
+                      </packing>
+                    </child>
+                  </object>
+                  <packing>
+                    <property name="expand">True</property>
+                    <property name="fill">True</property>
+                  </packing>
+                </child>
+              </object>
+              <packing>
+                <property name="expand">False</property>
+                <property name="fill">True</property>
+              </packing>
+            </child>
+            <child>
+              <object class="GtkLabel" id="status">
+                <property name="label">就绪 · 编辑场馆和时段不读取空位</property>
+                <property name="xalign">0</property>
+                <property name="ellipsize">end</property>
+                <style>
+                  <class name="caption" />
+                </style>
+              </object>
+              <packing>
+                <property name="expand">False</property>
+                <property name="fill">True</property>
+              </packing>
+            </child>
+          </object>
+          <packing>
+            <property name="expand">True</property>
+            <property name="fill">True</property>
+          </packing>
+        </child>
+      </object>
+    </child>
+  </object>
+</interface>

@@ -1,0 +1,79 @@
+# Windows private dependency manifest
+
+Target: Windows 11 x86_64. Runtime files are extracted inside this application folder. No global installation, PATH modification, system Python, WSL or administrator privileges are required. The build uses Python 3.14+ and the existing Windows .NET Framework C# compiler.
+
+Pins and upstream/source links are preserved in `native/windows-runtime.lock.json`. GTK dependency metadata was seeded from the existing TeleMail Windows inventory; AutoReserve does not import or require TeleMail. Archives are verified against their SHA256 pins before extraction.
+
+| Dependency | Version | Download bytes | SHA256 |
+| --- | --- | ---: | --- |
+| [CPython embedded](https://www.python.org/ftp/python/3.14.5/python-3.14.5-embeddable-amd64.zip) | 3.14.5 | 12049130 | 613011911210b308ab308274f77b713d5994b081ca78f89afab8d1674388a51f |
+| [playwright](https://files.pythonhosted.org/packages/96/0a/64db6851aa1852a4f76be28eea71d4e2bf9f3ce493ee2e66939426729046/playwright-1.64.1-py3-none-win_amd64.whl) | 1.64.1 | 38801836 | 5e240a79464434c9260957b9ef59a5808e02e96e3fcabdc717fd7485260b9730 |
+| [pyee](https://files.pythonhosted.org/packages/81/12/5347938b1f9a6453f0dbdfcc3e2388a1320ef9b9ec17fbefbc4ab647ea98/pyee-14.0.0-py3-none-any.whl) | 14.0.0 | 15553 | 3ac2d3229a9677f7de2c33d7f52fe25b638a46b19c413fea2edc8c6d0a644e4d |
+| [greenlet](https://files.pythonhosted.org/packages/c9/9e/019642432e6ae283301df1361227d47610709d2dc69a38f95edef266d713/greenlet-3.5.6-cp314-cp314-win_amd64.whl) | 3.5.6 | 327473 | f8f0bd690e1a41294ac87905e8121c81a3761ec2583c768f13467428606c8c7a |
+| [typing_extensions](https://files.pythonhosted.org/packages/49/d3/b8441a820a491ddfc024b0b0cf0393375b75ea13866d9c66727e54c2fc80/typing_extensions-4.16.0-py3-none-any.whl) | 4.16.0 | 45571 | 481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8 |
+| [tzdata](https://files.pythonhosted.org/packages/94/21/1e5995a1c920cce14e4bffae20c665ec10e7ed03ab25e006cd741092b718/tzdata-2026.5-py2.py3-none-any.whl) | 2026.5 | 347996 | b683bd1b6659ddcd810ff02ad09ba821d4bf1065072805063eb35c49617905ac |
+| [mingw-w64-ucrt-x86_64-adwaita-icon-theme](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-adwaita-icon-theme-51.0-1-any.pkg.tar.zst) | 51.0-1 | 1828217 | 27323f39c04761d94b882ad012dd4a78eccc0efe4e0d8d5a28786a5eec6bdc4c |
+| [mingw-w64-ucrt-x86_64-adwaita-icon-theme-legacy](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-adwaita-icon-theme-legacy-46.2-1-any.pkg.tar.zst) | 46.2-1 | 2152574 | f365c5724a7829e5cc52f131cd664f0391f996cf456bc7da6196e4cc5ce82903 |
+| [mingw-w64-ucrt-x86_64-atk](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-atk-2.62.0.1-1-any.pkg.tar.zst) | 2.62.0.1-1 | 418360 | 274a9f08d9d0f539406927ec6cd603ef673517e1d1df881f4a49c8836bc76195 |
+| [mingw-w64-ucrt-x86_64-brotli](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-brotli-1.2.0-1-any.pkg.tar.zst) | 1.2.0-1 | 453708 | 9cc89665496ea504751476eafba15c71c554aaf3004babc2004f7c07ffd60514 |
+| [mingw-w64-ucrt-x86_64-bzip2](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-bzip2-1.0.8-4-any.pkg.tar.zst) | 1.0.8-4 | 94396 | f03a2174034ddd2d96cecd34f617c5f8e2ef86c812b8d2bb3b8875257f2c8bfa |
+| [mingw-w64-ucrt-x86_64-cairo](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-cairo-1.18.6-2-any.pkg.tar.zst) | 1.18.6-2 | 893167 | 021c0a4d1df463d08d0cac170818a7cbaccaa5b09ac6edc7948e461cb5a46e85 |
+| [mingw-w64-ucrt-x86_64-cc-libs](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-cc-libs-16.2.0-6-any.pkg.tar.zst) | 16.2.0-6 | 2343 | d8fff9e62443168bcda8ce746697243519c4f090ea607357ce94feac0bd10a50 |
+| [mingw-w64-ucrt-x86_64-egl-headers](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-egl-headers-1.5.r284.3ae2b7c-1-any.pkg.tar.zst) | 1.5.r284.3ae2b7c-1 | 17478 | 29743159048cf216f75d0dc3eb3e0a04a07515db17d839803e54b060f5aeb0b3 |
+| [mingw-w64-ucrt-x86_64-expat](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-expat-2.9.0-1-any.pkg.tar.zst) | 2.9.0-1 | 197375 | f52364dc874009316e1ee1fe46ee89784594b80d10cbcc1cc856945d575308e0 |
+| [mingw-w64-ucrt-x86_64-fontconfig](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-fontconfig-2.18.3-1-any.pkg.tar.zst) | 2.18.3-1 | 302429 | d0b364f3ee37e3b6f6c136688ce8fa909bb6d8a69df7e08de1aa40870d9e1d60 |
+| [mingw-w64-ucrt-x86_64-freetype](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-freetype-2.15.0-1-any.pkg.tar.zst) | 2.15.0-1 | 640235 | a9a691f71d1a553099c54ca666e611abfb2b4ff08dae24f2a5af72e22a7e5feb |
+| [mingw-w64-ucrt-x86_64-fribidi](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-fribidi-1.0.17-1-any.pkg.tar.zst) | 1.0.17-1 | 85992 | 3581ee03cf83a9bb0e98bf688c4f532a29553500e317532d90746de295b0f8a8 |
+| [mingw-w64-ucrt-x86_64-gdk-pixbuf2](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-gdk-pixbuf2-2.44.8-1-any.pkg.tar.zst) | 2.44.8-1 | 820387 | aacfe4bdf635b1ad5bd50ffe9b106f9256e5aee567aec37d4fabe142a0353419 |
+| [mingw-w64-ucrt-x86_64-gettext-runtime](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-gettext-runtime-1.0-1-any.pkg.tar.zst) | 1.0-1 | 417977 | ba693dda4ac375af76ce481ff3a6e7481286546cc7dc6d56c7021dae34084157 |
+| [mingw-w64-ucrt-x86_64-giflib](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-giflib-6.1.3-1-any.pkg.tar.zst) | 6.1.3-1 | 120903 | 9e7ac8feb0e2af6e0fce3c8ead1bd7bcaf018661d08033858c1e2657a04f6f1a |
+| [mingw-w64-ucrt-x86_64-gles-headers](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-gles-headers-3.2.r1065.7fc154c-1-any.pkg.tar.zst) | 3.2.r1065.7fc154c-1 | 52298 | 066007a50bd08f062b5494f2c4811a219e1a65f4ecdce2beb453f6d9d8b92098 |
+| [mingw-w64-ucrt-x86_64-glib2](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-glib2-2.90.1-1-any.pkg.tar.zst) | 2.90.1-1 | 5467018 | 9a7826349279bcca0c935b01880d812be9de9609aef2205be68fd7a6128c1695 |
+| [mingw-w64-ucrt-x86_64-graphite2](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-graphite2-1.3.15-1-any.pkg.tar.zst) | 1.3.15-1 | 152553 | 34ca1f88bff10ef182a6b1c8e5622d5029f13b05748e361af13b552b422ea849 |
+| [mingw-w64-ucrt-x86_64-gtk-update-icon-cache](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-gtk-update-icon-cache-3.24.52-1-any.pkg.tar.zst) | 3.24.52-1 | 25385 | eedfe01d226496699b95b065b3ec2a4fb3c51979b2fd649541a560d1f949ae18 |
+| [mingw-w64-ucrt-x86_64-gtk3](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-gtk3-3.24.52-1-any.pkg.tar.zst) | 3.24.52-1 | 11594020 | 1cdcac269932b5ac613ae6df0c097c8593029ef5d8651e7471ab252922dc8e97 |
+| [mingw-w64-ucrt-x86_64-harfbuzz](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-harfbuzz-14.6.0-1-any.pkg.tar.zst) | 14.6.0-1 | 2434657 | 8781d486c864bf91f482768cc5bd7267e49331636583d9f855af3974e6378e69 |
+| [mingw-w64-ucrt-x86_64-hicolor-icon-theme](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-hicolor-icon-theme-0.18-1-any.pkg.tar.zst) | 0.18-1 | 20147 | 1ef00d7c034935a479f951a36a7b0e17cfdc482765e860924061b98e6948340c |
+| [mingw-w64-ucrt-x86_64-jbigkit](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-jbigkit-2.1-6-any.pkg.tar.zst) | 2.1-6 | 71553 | 9e237d1041350e7436294cfa13d4bd3d1606d1f2a32ade2eb2958b4d4e79b7ad |
+| [mingw-w64-ucrt-x86_64-json-glib](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-json-glib-1.10.8-2-any.pkg.tar.zst) | 1.10.8-2 | 198168 | 3b07443be79b7be8062f085d4453161fc71441700494a393807f76c0abda2fc6 |
+| [mingw-w64-ucrt-x86_64-lerc](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-lerc-4.1.1-1-any.pkg.tar.zst) | 4.1.1-1 | 312118 | c0afbf4832488d67030c6f313349cd814946c9a7bc3ae9fd54524825c9ca055d |
+| [mingw-w64-ucrt-x86_64-libb2](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-libb2-0.98.1-3-any.pkg.tar.zst) | 0.98.1-3 | 24592 | dfb554635119d3c46adb00c9d0c589bb38d1cb0781b10ecf31de07ce388bd0c0 |
+| [mingw-w64-ucrt-x86_64-libdatrie](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-libdatrie-0.2.14-1-any.pkg.tar.zst) | 0.2.14-1 | 80929 | ea92777801ad325278193a362967540752ae37035016df2f6bcee2d89928a195 |
+| [mingw-w64-ucrt-x86_64-libdeflate](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-libdeflate-1.26-1-any.pkg.tar.zst) | 1.26-1 | 92465 | 17720c77bd01641a3554801cafd71d96fb7fff7427f4cc20ac9f36efb8cb3da0 |
+| [mingw-w64-ucrt-x86_64-libepoxy](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-libepoxy-1.5.10-7-any.pkg.tar.zst) | 1.5.10-7 | 873124 | c6c6994e8ec49071f06cc1fae475406bdf17603d4687ad0bcac2e11078cfd7c8 |
+| [mingw-w64-ucrt-x86_64-libffi](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-libffi-3.8.0-1-any.pkg.tar.zst) | 3.8.0-1 | 51576 | 99ad12f4ecfa00a889ef9c5c0188592368a5bac109d0c508ce4e04f29ea95a76 |
+| [mingw-w64-ucrt-x86_64-libgcc](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-libgcc-16.2.0-6-any.pkg.tar.zst) | 16.2.0-6 | 77191 | 80b2497f019977dd9528b1abc8621b1328a0115ab1f724047ccbb56bf323f11d |
+| [mingw-w64-ucrt-x86_64-libiconv](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-libiconv-1.19-1-any.pkg.tar.zst) | 1.19-1 | 744750 | 9a500f38c2b91808741c62fae746b3e9110b33a1ecf5c30fa0c66dbedddf7e16 |
+| [mingw-w64-ucrt-x86_64-libjpeg-turbo](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-libjpeg-turbo-3.2.0-1-any.pkg.tar.zst) | 3.2.0-1 | 791232 | 7c001d00df557cfee969ad43d37b9c31ae22869e8aac4091a89dc3ae6d95e11d |
+| [mingw-w64-ucrt-x86_64-libpng](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-libpng-1.6.59-1-any.pkg.tar.zst) | 1.6.59-1 | 402222 | 7f8448e06eceba8f8ce130390addea49f767bdf8f6b7e7eede8ca6d595e3d3a8 |
+| [mingw-w64-ucrt-x86_64-librsvg](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-librsvg-2.63.3-1-any.pkg.tar.zst) | 2.63.3-1 | 21698573 | 34fe8d7f25cbc0928eb4e03486585fffc8491be42a8944b24d72bdf0e9ad27a5 |
+| [mingw-w64-ucrt-x86_64-libstdc++](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-libstdc++-16.2.0-6-any.pkg.tar.zst) | 16.2.0-6 | 795910 | 33c5e58a85a538cf843a8672991cce591f0231d66da3b66a57629712d64be17f |
+| [mingw-w64-ucrt-x86_64-libsystre](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-libsystre-1.0.2-3-any.pkg.tar.zst) | 1.0.2-3 | 8603 | 62f564b1395d4862db1599b77f6588c32de5c80936845751cf369b31eee1560b |
+| [mingw-w64-ucrt-x86_64-libthai](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-libthai-0.1.30-1-any.pkg.tar.zst) | 0.1.30-1 | 214246 | c90ebbca3e7b4c34f4b3ffa501ba8d00cdaf6340cff7db3c46d79d5e01ef207c |
+| [mingw-w64-ucrt-x86_64-libtiff](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-libtiff-4.7.2-2-any.pkg.tar.zst) | 4.7.2-2 | 709209 | 258e08a91e6b1703d41730ffe6080c2a40968fe90896b45716c1b41042775076 |
+| [mingw-w64-ucrt-x86_64-libtre](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-libtre-0.9.0-2-any.pkg.tar.zst) | 0.9.0-2 | 82227 | d50f22545c50d7c0cd584474bba83f0c7a2cd8aab1aed1ad6c1f9c6452f3c4fc |
+| [mingw-w64-ucrt-x86_64-libwebp](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-libwebp-1.6.0-1-any.pkg.tar.zst) | 1.6.0-1 | 623411 | 34ff8396c403d484c8777ad49ad0fc06dfb94fadf6f14bcf84d50c45bc6fd17e |
+| [mingw-w64-ucrt-x86_64-libwinpthread](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-libwinpthread-14.0.0.r495.g63ebe6cdb-2-any.pkg.tar.zst) | 14.0.0.r495.g63ebe6cdb-2 | 32044 | 0cee80308aec93607165be8c8655c1c3884389e0c2829b022643de7988d8b1f9 |
+| [mingw-w64-ucrt-x86_64-libxml2](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-libxml2-2.15.4-2-any.pkg.tar.zst) | 2.15.4-2 | 1003948 | 1678213c8acddcee2a393477c26cafcb7a4e47c2d611638c028853b502c7d662 |
+| [mingw-w64-ucrt-x86_64-lzo2](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-lzo2-2.10-3-any.pkg.tar.zst) | 2.10-3 | 102253 | 717c8065996bea51543518a0d3ab46837bf9a990c41886348bd2fa9484ea23f3 |
+| [mingw-w64-ucrt-x86_64-mpdecimal](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-mpdecimal-4.0.1-3-any.pkg.tar.zst) | 4.0.1-3 | 158639 | abf25c3869ba5e5bc3b69fdeb6cd49b060fc1a64d0d2de10918adeae9630a68d |
+| [mingw-w64-ucrt-x86_64-ncurses](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-ncurses-6.6-4-any.pkg.tar.zst) | 6.6-4 | 1605818 | 88331fe78470ef2c5e0280652fee5e10b6dcaa35f8037725c359407f2702309c |
+| [mingw-w64-ucrt-x86_64-openssl](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-openssl-3.6.5-1-any.pkg.tar.zst) | 3.6.5-1 | 8297898 | 773e021ebad83f14b5c103db467411e8ff064663e1c7e7f730e2be72f4117064 |
+| [mingw-w64-ucrt-x86_64-pango](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-pango-1.58.2-1-any.pkg.tar.zst) | 1.58.2-1 | 696849 | 8d86e4a018ff139b010bf357fa1c9f9030fa32ee195c54ed7e89d8ea701851c8 |
+| [mingw-w64-ucrt-x86_64-pcre2](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-pcre2-10.49-1-any.pkg.tar.zst) | 10.49-1 | 1445467 | 63172179db724ac71e2439a7981134c1bcab8049bdddfd349b32b8f76ed52d1e |
+| [mingw-w64-ucrt-x86_64-pixman](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-pixman-0.46.4-3-any.pkg.tar.zst) | 0.46.4-3 | 356199 | 4c01b986563d2b5f7ad6fcec2d0ec9915d2f242ddac5eacddc19971964241cc5 |
+| [mingw-w64-ucrt-x86_64-python](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-python-3.14.8-1-any.pkg.tar.zst) | 3.14.8-1 | 27765405 | d6542336430039a7cb75f107b713332887665a26a0c9c51e82d8d772c7770b5e |
+| [mingw-w64-ucrt-x86_64-python-packaging](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-python-packaging-26.3-1-any.pkg.tar.zst) | 26.3-1 | 263600 | b90d1451cfbf015a5334409bd9edf9c61bc0f7b78cac19400b0f92c9279fbaa7 |
+| [mingw-w64-ucrt-x86_64-shared-mime-info](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-shared-mime-info-2.5.1-1-any.pkg.tar.zst) | 2.5.1-1 | 790995 | 71da1e4032374f89e2c9fcfd8f626b5b64e6d359e53235cd9653465e88d435d6 |
+| [mingw-w64-ucrt-x86_64-sqlite3](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-sqlite3-3.54.0-1-any.pkg.tar.zst) | 3.54.0-1 | 2485166 | fc7100490316733bbb96d5633d305a5d6c579200c321969cfa21d5a128055e65 |
+| [mingw-w64-ucrt-x86_64-tcl](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-tcl-8.6.18-1-any.pkg.tar.zst) | 8.6.18-1 | 2805892 | 0c3a50ea5be8c5190e58a1fdc46c09f8113ad1b855745875646b7a78a02215df |
+| [mingw-w64-ucrt-x86_64-tk](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-tk-8.6.18-1-any.pkg.tar.zst) | 8.6.18-1 | 2122449 | bfa011886032962833ddc93ae9b508798ec56625b9093cc6d0ff5c95507c79c6 |
+| [mingw-w64-ucrt-x86_64-tzdata](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-tzdata-2026e-1-any.pkg.tar.zst) | 2026e-1 | 225916 | f1809089f8ed5cec858ae8584289172896eb921be1e78ba583555f74e9015428 |
+| [mingw-w64-ucrt-x86_64-wineditline](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-wineditline-2.208-1-any.pkg.tar.zst) | 2.208-1 | 61123 | b07b34de1669e16cfd6743691914f5a66ad4013500bbf0e4c7a7644046ae7b1c |
+| [mingw-w64-ucrt-x86_64-xz](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-xz-5.8.4-1-any.pkg.tar.zst) | 5.8.4-1 | 905211 | a9d771f816d8c0c5bde152ffb27a687ede91079b8e77e5b8297efa3b5a835934 |
+| [mingw-w64-ucrt-x86_64-zlib](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-zlib-1.3.2-2-any.pkg.tar.zst) | 1.3.2-2 | 111475 | 841401182976d2f9e17e5c0ebaac51f2a8014140ea53d67625e91c8fb3c85ea0 |
+| [mingw-w64-ucrt-x86_64-zstd](https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-zstd-1.5.7-2-any.pkg.tar.zst) | 1.5.7-2 | 668277 | dbdb8427280046a2b41697780aa4c52983b708082b0da4755951dc3bea96ca89 |
+
+Total pinned downloads: 159,535,901 bytes. Chromium is a separate, version-selected Playwright download on first run.
+
+Python requirements are Playwright 1.64.1, pyee 14.0.0, greenlet 3.5.6, typing_extensions 4.16.0, and Windows tzdata 2026.5. GTK is 3.24.52; GLib is 2.90.1. CPython is the standard GIL-enabled 3.14.5 amd64 embedded distribution. No cross compiler, MSYS shell or development headers are shipped.

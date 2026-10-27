@@ -1,0 +1,31 @@
+# Private account, orders, runtime config and evidence
+.auth/
+artifacts/
+.research/
+/config/*
+!/config/.gitignore
+!/config/README.md
+!/config/example.json
+config.json
+# Python and local environments
+__pycache__/
+*.py[cod]
+.venv/
+.runtime/
+/AutoReserve
+/AutoReserve.exe
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+# Build outputs
+dist/
+build/
+*.egg-info/
+*.tmp
+*.log
+# Editors and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
