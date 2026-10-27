@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import Mock, patch
 from zoneinfo import ZoneInfo
 
-from autoreserve.catalog import ANY_COURT, DirectoryCache, DirectoryClient, LoginRequired, booking_url
+from autoreserve.catalog import ANY_COURT, DirectoryCache, DirectoryClient, DirectoryUnavailable, LoginRequired, booking_url
 from autoreserve.config import Config, Goal, Target, load_config, save_config
 from autoreserve.desktop_controller import DesktopController
 from autoreserve.state import Journal, private_json
@@ -138,6 +138,60 @@ class DirectoryTests(unittest.TestCase):
                 client.authenticated()
         page.evaluate.return_value = {"status": 200, "data": {"code": 0, "data": {"loginName": "mock-user"}}}
         self.assertTrue(client.authenticated())
+
+    # ==========================================
+    # Function: Recover transient aborts using a longer, bounded second request.
+    # Method: Return browser transport errors before valid metadata and skip only the retry clock in unit tests.
+    # ==========================================
+    def test_directory_transport_retry_has_bounded_larger_timeout(self):
+        for error in ('timeout','network','aborted'):
+            page, progress = Mock(), Mock()
+            response = {'status':200,'data':{'code':0,'rows':[],'total':0}}
+            page.evaluate.side_effect = [{'error':error},response]
+            with self.subTest(error=error), patch('autoreserve.catalog.time.monotonic',side_effect=[0,3]):
+                self.assertEqual(DirectoryClient(page,progress=progress).fetch('/manage/venue/list',{}),response['data'])
+            self.assertEqual([call.args[1]['timeout'] for call in page.evaluate.call_args_list],[30000,60000])
+            self.assertEqual(page.evaluate.call_count,2)
+            progress.assert_called_once()
+
+    # ==========================================
+    # Function: Preserve authentication and stop after persistent metadata transport failures.
+    # Method: Exhaust exactly two attempts and require an actionable directory error instead of login rejection.
+    # ==========================================
+    def test_directory_retry_exhaustion_is_not_expired_login(self):
+        page = Mock()
+        page.evaluate.return_value = {'error':'timeout'}
+        with patch('autoreserve.catalog.time.monotonic',side_effect=[0,3]):
+            with self.assertRaisesRegex(DirectoryUnavailable,'已尝试 2 次.*登录保留'):
+                DirectoryClient(page).fetch('/manage/venue/list',{})
+        self.assertEqual(page.evaluate.call_count,2)
+
+    # ==========================================
+    # Function: Respect explicit login rejection, throttles and invalid server responses without a transport retry.
+    # Method: Check HTTP and application statuses plus malformed JSON with a strict one-call count.
+    # ==========================================
+    def test_directory_server_errors_are_not_retried(self):
+        for status,data,error in ((401,None,LoginRequired),(403,None,LoginRequired),
+                                  (429,None,DirectoryUnavailable),(503,None,DirectoryUnavailable),
+                                  (500,None,DirectoryUnavailable),(200,None,DirectoryUnavailable),
+                                  (200,{'code':401},LoginRequired),(200,{'code':429},RuntimeError)):
+            page = Mock()
+            page.evaluate.return_value = {'status':status,'data':data}
+            with self.subTest(status=status,data=data), self.assertRaises(error):
+                DirectoryClient(page).fetch('/system/user/currentUser')
+            page.evaluate.assert_called_once()
+
+    # ==========================================
+    # Function: Honor cancellation between a failed metadata read and its only retry.
+    # Method: Request stop from the progress callback and forbid another browser evaluation.
+    # ==========================================
+    def test_directory_retry_is_cancelable(self):
+        page, stopped = Mock(), []
+        page.evaluate.return_value = {'error':'timeout'}
+        client = DirectoryClient(page,stop=lambda:bool(stopped),progress=stopped.append)
+        with self.assertRaises(InterruptedError):
+            client.fetch('/manage/venue/list',{})
+        page.evaluate.assert_called_once()
 
     # ==========================================
     # Function: Preserve encoded route segments for selected cached projects.

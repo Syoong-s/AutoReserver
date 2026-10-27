@@ -226,7 +226,17 @@ class DesktopController(Controller):
                 page.wait_for_timeout(100)
             last_read[0] = time.monotonic()
 
-        self.catalog = self.cache.ensure(client.fetch, wait, self.log, self.stop_event.is_set)
+        # ==========================================
+        # Function: Preserve metadata pacing after an internally retried request completes.
+        # Method: Restart the shared spacing clock after the full fetch instead of using the first attempt's timestamp.
+        # ==========================================
+        def fetch(endpoint, values):
+            try:
+                return client.fetch(endpoint, values)
+            finally:
+                last_read[0] = time.monotonic()
+
+        self.catalog = self.cache.ensure(fetch, wait, self.log, self.stop_event.is_set)
         self.emit("catalog", self.catalog)
         self.log(f"目录已缓存：{len(self.catalog['venues'])} 个场馆；以后启动和切换均从本机读取")
 
@@ -282,7 +292,7 @@ class DesktopController(Controller):
                         if operation != "run":
                             block_availability(page)
                         page.goto(HOME_URL, wait_until="domcontentloaded")
-                        client = DirectoryClient(page)
+                        client = DirectoryClient(page, stop=self.stop_event.is_set, progress=self.log)
                         if operation == "login":
                             self.homepage_login(context, page, client)
                         else:

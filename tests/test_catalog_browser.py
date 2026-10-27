@@ -6,11 +6,12 @@ import os
 from pathlib import Path
 import tempfile
 import threading
+import time
 import unittest
 from unittest.mock import patch
 
 from autoreserve.browser import open_browser, save_session
-from autoreserve.catalog import DirectoryCache, DirectoryClient, LoginRequired, block_availability
+from autoreserve.catalog import DirectoryCache, DirectoryClient, DirectoryUnavailable, LoginRequired, block_availability
 from autoreserve.config import save_config
 from autoreserve.desktop_controller import DesktopController
 from autoreserve.state import private_json
@@ -24,7 +25,7 @@ from test_catalog import directory_fixture, native_config
 class DirectoryHandler(BaseHTTPRequestHandler):
     # ==========================================
     # Function: Return deterministic local JSON responses.
-    # Method: Use explicit content type and length without contacting any remote service.
+    # Method: Delay selected response bodies and tolerate reads deliberately canceled by the client timeout.
     # ==========================================
     def reply(self, value):
         body = json.dumps(value, ensure_ascii=False).encode()
@@ -32,7 +33,13 @@ class DirectoryHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        delays = getattr(self.server,'body_delays',{}).get(self.path,[])
+        if delays:
+            time.sleep(delays.pop(0))
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError,ConnectionResetError,ConnectionAbortedError):
+            pass  # A deliberate timeout may close this test response before its body is ready.
 
     # ==========================================
     # Function: Serve the homepage and authenticated identity check.
@@ -60,6 +67,8 @@ class DirectoryHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         from urllib.parse import parse_qs
         self.server.calls.append(self.path)
+        if hasattr(self.server,'request_times'):
+            self.server.request_times.append((self.path,time.monotonic()))
         values = parse_qs(self.rfile.read(int(self.headers.get("Content-Length", "0"))).decode())
         venues = directory_fixture()["venues"]
         if self.path == "/manage/venue/list":
@@ -127,6 +136,71 @@ class DirectoryBrowserTests(unittest.TestCase):
             self.assertEqual(self.server.calls, calls)
             self.assertEqual(sum(path == "/manage/venue/list" for path in calls), 1)
             self.assertFalse(any("fieldDetail" in path or "ConfirmOrder" in path for path in calls))
+
+    # ==========================================
+    # Function: Complete first-login caching when a metadata body stalls beyond the initial fetch deadline.
+    # Method: Delay one real HTTP body, capture fresh login, then verify one retry and an entirely offline cache hit.
+    # ==========================================
+    def test_first_login_recovers_slow_directory_response(self):
+        self.server.body_delays = {'/manage/venue/list':[.8]}
+        self.server.request_times = []
+        controller = DesktopController(self.root/'config.json',self.root/'auth')
+        with open_browser(self.config,self.root/'auth',login=True) as (context,page):
+            block_availability(page)
+            page.goto(self.base)
+            controller.capture_event.set()
+            client = DirectoryClient(page,timeout_ms=500,progress=controller.log)
+            with patch('autoreserve.desktop_controller.HOME_URL',self.base):
+                controller.homepage_login(context,page,client)
+            self.assertEqual(controller.auth_status,'已登录')
+            self.assertEqual(controller.cache.load()['venues'],directory_fixture()['venues'])
+            calls = list(self.server.calls)
+            controller.cache.ensure(lambda *args:self.fail('cached metadata fetched again'),lambda:None)
+            self.assertEqual(self.server.calls,calls)
+        self.assertTrue((self.root/'auth/session.json').exists())
+        self.assertTrue((self.root/'auth/storage.json').exists())
+        self.assertEqual(calls.count('/manage/venue/list'),2)
+        for (_,before),(_,after) in zip(self.server.request_times,self.server.request_times[1:]):
+            self.assertGreaterEqual(after-before,1.9)
+        self.assertFalse(any('fieldDetail' in path or 'ConfirmOrder' in path for path in calls))
+
+    # ==========================================
+    # Function: Keep a confirmed fresh login when both attempts to read the directory fail.
+    # Method: Stall real response bodies twice and require no partial catalog or authentication invalidation.
+    # ==========================================
+    def test_directory_timeout_preserves_captured_login(self):
+        self.server.body_delays = {'/manage/venue/list':[.8,1.3]}
+        controller = DesktopController(self.root/'config.json',self.root/'auth')
+        with open_browser(self.config,self.root/'auth',login=True) as (context,page):
+            block_availability(page)
+            page.goto(self.base)
+            controller.capture_event.set()
+            with patch('autoreserve.desktop_controller.HOME_URL',self.base):
+                with self.assertRaisesRegex(DirectoryUnavailable,'已尝试 2 次'):
+                    controller.homepage_login(context,page,DirectoryClient(page,timeout_ms=500))
+        self.assertEqual(controller.auth_status,'已登录')
+        self.assertTrue((self.root/'auth/session.json').exists())
+        self.assertTrue((self.root/'auth/storage.json').exists())
+        self.assertFalse(controller.cache.path.exists())
+        self.assertEqual(self.server.calls.count('/manage/venue/list'),2)
+        self.assertFalse(any('fieldDetail' in path or 'ConfirmOrder' in path for path in self.server.calls))
+
+    # ==========================================
+    # Function: Recover the exact AbortError reported from the Windows first-login workflow.
+    # Method: Inject one browser fetch rejection, then require the same production client to confirm the real session.
+    # ==========================================
+    def test_browser_abort_error_retries_once(self):
+        with open_browser(self.config,self.root/'auth') as (_,page):
+            page.goto(self.base)
+            page.evaluate("""() => {
+                const original = window.fetch;
+                window.fetch = (...args) => {
+                    window.fetch = original;
+                    return Promise.reject(new DOMException('signal is aborted without reason','AbortError'));
+                };
+            }""")
+            self.assertTrue(DirectoryClient(page,timeout_ms=500).authenticated())
+        self.assertEqual(self.server.calls.count('/system/user/currentUser'),1)
 
     # ==========================================
     # Function: Save login while remaining on the homepage with an existing directory cache.

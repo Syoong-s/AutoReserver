@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import re
+import time
 from urllib.parse import quote, urlencode, urlsplit
 
 from .config import HOME_URL
@@ -20,6 +21,14 @@ ANY_COURT = "任意可用场地"
 # Method: Keep login failures distinct from directory errors and empty inventories.
 # ==========================================
 class LoginRequired(RuntimeError):
+    pass
+
+
+# ==========================================
+# Function: Report metadata transport failures without invalidating an authenticated session.
+# Method: Keep bounded timeout/network recovery distinct from server-confirmed login rejection.
+# ==========================================
+class DirectoryUnavailable(RuntimeError):
     pass
 
 
@@ -46,39 +55,66 @@ def booking_url(venue_id, sport_name):
 class DirectoryClient:
     # ==========================================
     # Function: Associate metadata reads with an existing browser session.
-    # Method: Retain the page without copying cookies or credentials into the catalog.
+    # Method: Retain browser credentials in place and accept cooperative stop/progress callbacks.
     # ==========================================
-    def __init__(self, page):
+    def __init__(self, page, stop=None, progress=None, timeout_ms=30000):
         self.page = page
+        self.stop = stop or (lambda: False)
+        self.progress = progress or (lambda message: None)
+        self.timeout_ms = timeout_ms
 
     # ==========================================
     # Function: Execute one strictly read-only directory operation.
-    # Method: Reject any non-directory endpoint before evaluating a browser fetch.
+    # Method: Allow one paced retry for transport failures, with 30/60-second whole-response budgets by default.
     # ==========================================
     def fetch(self, endpoint, values=None):
         if endpoint not in DIRECTORY_ENDPOINTS:
             raise ValueError("目录操作不允许读取空位或提交订单")
-        response = self.page.evaluate("""async ({endpoint, body}) => {
+        arguments = {"endpoint": endpoint, "body": urlencode(values) if values is not None else None}
+        for attempt in range(2):
+            if self.stop():
+                raise InterruptedError("目录读取已停止")
+            timeout = self.timeout_ms * (attempt+1)
+            response = self.page.evaluate("""async ({endpoint, body, timeout}) => {
             const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), 15000);
+            const timer = setTimeout(() => controller.abort(), timeout);
             try {
                 const r = await fetch(endpoint, {
                     method: body === null ? 'GET' : 'POST', credentials: 'same-origin',
                     headers: body === null ? {} : {'Content-Type':'application/x-www-form-urlencoded'},
                     body: body, signal: controller.signal,
                 });
+                if (r.status !== 200) return {status:r.status, data:null};
                 const text = await r.text();
                 let data; try { data = JSON.parse(text); } catch { data = null; }
                 return {status:r.status, data};
+            } catch (error) {
+                return {error: controller.signal.aborted || error.name === 'TimeoutError' ? 'timeout' :
+                    error.name === 'AbortError' ? 'aborted' : 'network'};
             } finally { clearTimeout(timer); }
-        }""", {"endpoint": endpoint, "body": urlencode(values) if values is not None else None})
+        }""", {**arguments, "timeout": timeout})
+            if self.stop():
+                raise InterruptedError("目录读取已停止")
+            if not response.get('error'):
+                break
+            reason = (f"等待 {timeout/1000:g} 秒后超时" if response['error']=='timeout' else
+                      '被浏览器中止' if response['error']=='aborted' else '网络连接中断')
+            if attempt == 1:
+                raise DirectoryUnavailable(f"目录请求{reason}（{endpoint}，已尝试 2 次）。"
+                                           "未写入不完整目录，已保存的登录保留；请检查网络后重新打开客户端重试。")
+            self.progress(f"目录请求{reason}；2 秒后重试一次，最多等待 {timeout*2/1000:g} 秒")
+            deadline = time.monotonic()+2
+            while time.monotonic() < deadline:
+                if self.stop():
+                    raise InterruptedError("目录读取已停止")
+                self.page.wait_for_timeout(min(100, max(1,(deadline-time.monotonic())*1000)))
         status, data = response["status"], response["data"]
         if status in {401, 403} or (isinstance(data, dict) and str(data.get("code")) in {"401", "403"}):
             raise LoginRequired("登录已失效，请在网站主界面重新登录并保存")
         if status in {429, 503}:
-            raise RuntimeError(f"目录请求 HTTP {status}，已停止读取；请稍后再打开客户端")
+            raise DirectoryUnavailable(f"目录请求 HTTP {status}，已停止读取；请稍后再打开客户端")
         if status != 200 or not isinstance(data, dict):
-            raise LoginRequired("未收到已登录网站的有效响应，请重新登录并保存")
+            raise DirectoryUnavailable(f"未收到有效目录响应（{endpoint}，HTTP {status}），未写入缓存；请稍后重试")
         if str(data.get("code")) != "0":
             raise RuntimeError("网站未返回有效目录数据，未写入缓存")
         return data

@@ -85,6 +85,10 @@ UI 通过事件队列接收每个目标的 last_checked_at/check_count/watch_sta
 
 目录仅允许 `/manage/venue/list`、`/manage/venue/queryVenueById` 及上述身份确认端点。列表使用个人预约 flag=0，按分页读取可见场馆，读取每个场馆的 motionTypes，并串行间隔至少 2 秒。最终只缓存场馆 ID、名称、校区和项目 ID、名称，不缓存身份或库存。缓存存在则直接返回，不过期、不后台刷新；缓存损坏明确报错。首次失败不写入半份缓存。
 
+首次目录读取使用覆盖响应头和完整响应体的 30 秒超时。浏览器中止、网络中断或超时后，串行等待 2 秒并只重试一次，第二次上限为 60 秒；日志区分浏览器中止与实际超时，并包含失败端点。请求前及重试等待期间响应停止操作。HTTP 401/403 或业务登录失效仍立即要求重新登录；429/503、其他 HTTP 错误和无效 JSON 不自动重试。目录传输失败不误报登录失效，已保存的认证保留，不发布残缺缓存；重新打开客户端可从缺失目录的状态重试。不会重放下单或空位接口。
+
+该修复在 Python 3.14.4（Linux）及发行包内 Python 3.14.5（Windows）/ Playwright 1.64.1 / Chromium（Playwright revision 1248）运行库下验证，无新增依赖。目录单元测试使用 `python -m unittest discover -s tests -p test_catalog.py -v`；本机浏览器测试先使用 `scripts.bootstrap.environment()` 设置已有私有运行库，再以 `RUN_BROWSER_TESTS=1` 运行 `python -m unittest discover -s tests -p test_catalog_browser.py -v`。Windows 使用内置 Python 运行相同的本地测试；Release 的 `--self-test --test-source SOURCE_DIRECTORY` 也覆盖首次登录慢响应恢复、重试耗尽后保留登录和原始 AbortError 复现。
+
 选择缓存场馆和项目时，由目录生成已验证格式的个人预约路由。v0.5 将各项目旧目标合并进统一工作台，每个候选分别保存上下文，origin 保留旧订单身份；添加器中的场馆选择不再切换或清空目标。订单 journal 不随场馆选择清理。
 
 具体场地选项来自该项目监测中已读到的列名，保存在独立 courts.json；从未监测的项目可选“任意可用场地”。开始监测后才展开为真实网格列，保留候选及时间优先级，并使用具体场地核对摘要、金额和持久提交锁。定时任务在到达启动时间之前不加载网格。

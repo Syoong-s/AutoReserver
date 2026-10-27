@@ -142,6 +142,7 @@ def self_test(root, test_source=None):
         from test_gtk import GtkWorkspaceTests
         from test_browser import BrowserTests
         from test_rush_browser import RushBrowserTests
+        from test_catalog_browser import DirectoryBrowserTests
         cases = [GtkWorkspaceTests(name) for name in (
             'test_settings_first_frame_has_native_close_only_header',
             'test_three_sections_remember_independent_folds',
@@ -150,6 +151,10 @@ def self_test(root, test_source=None):
             'test_rush_progress_keeps_fold_and_clock_uncertainty')]
         cases.extend([BrowserTests('test_submit_stops_before_payment'),
                       RushBrowserTests('test_release_gates_selection_and_discards_prewarm_stock')])
+        cases.extend(DirectoryBrowserTests(name) for name in (
+            'test_first_login_recovers_slow_directory_response',
+            'test_directory_timeout_preserves_captured_login',
+            'test_browser_abort_error_retries_once'))
         result = unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite(cases))
         if not result.wasSuccessful():
             raise RuntimeError('Windows 本地验证失败，请查看运行日志')
