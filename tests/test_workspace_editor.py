@@ -99,24 +99,24 @@ class WorkspaceEditorTests(unittest.TestCase):
 
     # ==========================================
     # Function: Preserve durable goal requirements while permitting independent copies.
-    # Method: Mark a source submitted, reject editing/removal, and allow its next-day clone.
+    # Method: Mark a source submitted, reject requirement edits, allow copies and permit independent removal.
     # ==========================================
     def test_recorded_goals_are_immutable_but_copyable(self):
         model=self.model
         source=model.selected
         model.states[source]={'status':'submitted'}
         with self.assertRaises(ValueError):
-            model.remove(source)
-        with self.assertRaises(ValueError):
             model.metadata('改写','2030-01-01')
         model.copy_next(source)
         self.assertEqual(len(model.data['goals']),2)
+        model.remove(source)
+        self.assertIsNone(model.get(source))
 
     # ==========================================
-    # Function: Keep old weekly templates and materialized order instances independent.
-    # Method: Generate an occurrence then remove its template, retaining the dated target.
+    # Function: Remove a weekly template together with its generated target instances.
+    # Method: Generate an occurrence and verify complete editor cleanup independently of order history.
     # ==========================================
-    def test_removing_repeat_keeps_generated_occurrences(self):
+    def test_removing_repeat_removes_generated_occurrences(self):
         model=self.model
         model.toggle_repeat()
         identity=model.selected
@@ -125,5 +125,5 @@ class WorkspaceEditorTests(unittest.TestCase):
                     'candidates':deepcopy(template['candidates']),'repeat_id':template['id'],'origin':None}
         model.data['goals'].append(occurrence)
         model.remove(identity)
-        self.assertEqual(model.data['goals'],[occurrence])
+        self.assertEqual(model.data['goals'],[])
         self.assertEqual(model.data['repeat_rules'],[])

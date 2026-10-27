@@ -24,6 +24,8 @@ class Workspace:
         self.selected = None
         self.states, self.dates, self.drafts = {}, {}, {}
         self.dirty = False
+        self.baseline = deepcopy(self.data)
+        self.replacements = {}
         if self.items():
             self.selected = self.items()[0][0]
 
@@ -75,9 +77,9 @@ class Workspace:
         item = self.get(identity)
         today = self.today()
         if item and self.repeating(identity):
-            for offset in range(8):
+            for offset in range(7*(len(item.get('skip_dates',[]))+1)+1):
                 day = today+timedelta(days=offset)
-                if day.weekday() in item['weekdays'] and not any(g['id'] == f"daily-{item['id']}-{day.isoformat()}" for g in self.data['goals']):
+                if day.weekday() in item['weekdays'] and day.isoformat() not in item.get('skip_dates',[]) and not any(g['id'] == f"daily-{item['id']}-{day.isoformat()}" for g in self.data['goals']):
                     return (day+timedelta(days=item['days_ahead'])).isoformat()
         if item and item['candidates']:
             return item['candidates'][0]['date']
@@ -149,16 +151,25 @@ class Workspace:
         return result
 
     # ==========================================
-    # Function: Remove only an editable goal or independent repeat template.
-    # Method: Leave the journal and already-generated occurrences intact.
+    # Function: Remove a goal regardless of recorded execution status while leaving order history independent.
+    # Method: Clear local drafts, dated occurrences of a deleted template and their transient editor state.
     # ==========================================
     def remove(self, identity):
-        self.editable(identity)
-        self.data['repeat_rules' if self.repeating(identity) else 'goals'].remove(self.get(identity))
-        self.drafts.pop(identity, None)
-        if self.selected == identity:
+        item = self.get(identity)
+        if item is None:
+            raise ValueError('目标不存在')
+        removed = {identity, *self.replacements.pop(identity, set())}
+        rules={value[5:] for value in removed if value.startswith('rule:')}
+        removed.update(g['id'] for g in self.data['goals'] if g.get('repeat_id') in rules)
+        self.data['goals'] = [g for g in self.data['goals'] if g['id'] not in removed]
+        self.data['repeat_rules'] = [r for r in self.data['repeat_rules'] if 'rule:'+r['id'] not in removed]
+        for key in removed:
+            for store in (self.drafts,self.dates,self.states,self.replacements):
+                store.pop(key,None)
+        if self.selected in removed:
             self.selected = self.items()[0][0] if self.items() else None
         self.dirty = True
+        return removed
 
     # ==========================================
     # Function: Preserve explicit priority when reordering goals or candidates.
@@ -213,6 +224,7 @@ class Workspace:
             self.data['goals'].remove(source)
             self.selected = 'rule:'+item['id']
         self.drafts[self.selected] = self.drafts.pop(old_id, [])
+        self.replacements[self.selected] = self.replacements.pop(old_id,set()) | {old_id}
         self.dirty = True
         return item
 
@@ -281,8 +293,49 @@ class Workspace:
         self.dirty = True
 
     # ==========================================
-    # Function: Validate a full persistable working copy.
-    # Method: Use the same strict schema consumed by the booking engine.
+    # Function: Validate a selected target projection or an explicitly requested full working copy.
+    # Method: Use the booking schema without letting unrelated incomplete drafts block scoped saves.
     # ==========================================
-    def payload(self):
-        return asdict(config_from_dict(self.data))
+    def payload(self, identity=None):
+        if identity is None:
+            return asdict(config_from_dict(self.data))
+        item = self.get(identity)
+        if item is None:
+            raise ValueError('请先选择一个预约目标')
+        repeating = self.repeating(identity)
+        return asdict(config_from_dict(self.data | {'targets':[], 'goals':[] if repeating else [item],
+                                                  'repeat_rules':[item] if repeating else []}))
+
+    # ==========================================
+    # Function: Accept a scoped disk save while retaining other goals' unsaved and incomplete drafts.
+    # Method: Update the persisted baseline and compute remaining edits without overwriting the working model.
+    # ==========================================
+    def accept_saved(self, data, identity=None, removed=()):
+        self.baseline = deepcopy(data)
+        if identity:
+            self.replacements.pop(identity,None)
+        for key in removed:
+            self.replacements.pop(key,None)
+        self.dirty = self.data != self.baseline
+
+    # ==========================================
+    # Function: Merge generated occurrences and persisted settings without erasing unrelated unsaved target drafts.
+    # Method: Replace only entries unchanged from the previous disk baseline and append new remote identities.
+    # ==========================================
+    def merge_remote(self, data):
+        for field in ('goals','repeat_rules'):
+            before = {item['id']:item for item in self.baseline[field]}
+            remote = {item['id']:item for item in data[field]}
+            merged = []
+            for item in self.data[field]:
+                key = item['id']
+                if key in before and item==before[key]:
+                    if key in remote:
+                        merged.append(deepcopy(remote[key]))
+                else:
+                    merged.append(item)
+            present = {item['id'] for item in merged}
+            merged.extend(deepcopy(item) for key,item in remote.items() if key not in present and key not in before)
+            self.data[field] = merged
+        self.baseline = deepcopy(data)
+        self.dirty = self.data != self.baseline

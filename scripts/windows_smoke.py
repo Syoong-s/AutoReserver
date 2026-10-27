@@ -144,6 +144,8 @@ def self_test(root, test_source=None):
         from test_rush_browser import RushBrowserTests
         from test_catalog_browser import DirectoryBrowserTests
         from test_multivenue import MultiVenueTests
+        from test_goal_actions import GoalActionTests
+        cases_backend=unittest.defaultTestLoader.loadTestsFromTestCase(GoalActionTests)
         cases = [GtkWorkspaceTests(name) for name in (
             'test_settings_first_frame_has_native_close_only_header',
             'test_three_sections_remember_independent_folds',
@@ -155,9 +157,15 @@ def self_test(root, test_source=None):
             'test_candidate_composer_preserves_drafts_on_dismiss',
             'test_font_size_persists_without_changing_booking')]
         cases.extend(GtkWorkspaceTests(name) for name in (
+            'test_selected_toolbar_save_retains_unrelated_incomplete_draft',
+            'test_toolbar_start_uses_captured_goal_identity',
+            'test_completed_sidebar_delete_and_history_record_delete',
+            'test_closed_history_window_ignores_inflight_read'))
+        cases.extend(GtkWorkspaceTests(name) for name in (
             'test_native_dividers_resize_all_workspace_panels',
             'test_layout_preferences_restore_and_keep_font'))
         cases.extend([BrowserTests('test_submit_stops_before_payment'),
+                      BrowserTests('test_history_delete_allows_new_goal_for_identical_slot'),
                       BrowserTests('test_zero_duration_and_price_allow_unlimited_preview'),
                       MultiVenueTests('test_zero_duration_continues_until_stopped'),
                       RushBrowserTests('test_release_gates_selection_and_discards_prewarm_stock')])
@@ -165,7 +173,7 @@ def self_test(root, test_source=None):
             'test_first_login_recovers_slow_directory_response',
             'test_directory_timeout_preserves_captured_login',
             'test_browser_abort_error_retries_once'))
-        result = unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite(cases))
+        result = unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite([*cases,*cases_backend]))
         if not result.wasSuccessful():
             raise RuntimeError('Windows 本地验证失败，请查看运行日志')
         tests_run = result.testsRun

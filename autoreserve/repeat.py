@@ -59,7 +59,7 @@ def preparation_time(rule, day, zone):
 
 # ==========================================
 # Function: Find the next enabled weekday occurrence not yet materialized.
-# Method: Search a full local week and preserve deterministic rule/day identities.
+    # Method: Search beyond explicitly skipped weekdays while preserving deterministic rule/day identities.
 # ==========================================
 def next_daily(config, now=None):
     now = now or datetime.now(ZoneInfo(config.timezone))
@@ -69,9 +69,9 @@ def next_daily(config, now=None):
     for rule in config.repeat_rules:
         if not rule.enabled:
             continue
-        for offset in range(8):
+        for offset in range(7*(len(rule.skip_dates)+1)+1):
             day = now.date() + timedelta(days=offset)
-            if day.weekday() not in rule.weekdays or f"daily-{rule.id}-{day.isoformat()}" in identities:
+            if day.weekday() not in rule.weekdays or day.isoformat() in rule.skip_dates or f"daily-{rule.id}-{day.isoformat()}" in identities:
                 continue
             when = preparation_time(rule, day, ZoneInfo(config.timezone))
             times.append(max(when, now))
@@ -99,7 +99,7 @@ def materialize_daily(config, now=None, records=None):
     identities = {g.id for g in kept}
     for rule in config.repeat_rules:
         for execution_day in (today, today + timedelta(days=1)):
-            if (not rule.enabled or execution_day.weekday() not in rule.weekdays
+            if (not rule.enabled or execution_day.weekday() not in rule.weekdays or execution_day.isoformat() in rule.skip_dates
                     or now < preparation_time(rule, execution_day, ZoneInfo(config.timezone))):
                 continue
             identity = f"daily-{rule.id}-{execution_day.isoformat()}"

@@ -46,6 +46,9 @@ class GtkDesktop:
         self.model = Workspace(load_config(controller.config_path))
         self.loading = self.saving = self.closing = self.destroyed = False
         self.settings_window = self.notice_window = self.confirm_window = None
+        self.history_window = None
+        self.history_records,self.history_delete_buttons = [],[]
+        self.history_generation,self.history_page = 0,0
         self.settings_fields, self.notices, self.errors = {}, {}, []
         self.edit_controls, self.sidebar_rows = [], {}
         self.court_buttons, self.hour_buttons = {}, {}
@@ -65,7 +68,7 @@ class GtkDesktop:
         self._log_pending, self._shown_orders, self.next_read_at = False, set(), None
         self.builder = g.builder(ASSETS/'main.ui')
         ids = ['window','header','sidebar','main','new_goal','goals','goal_scroll','goal_count','goal_up','goal_down',
-               'settings','auth','login','summary','save','start','stop','capture','editor','editor_scroll',
+               'settings','history','auth','login','summary','save','start','stop','capture','editor','editor_scroll',
                'error_bar','error','dismiss_error','monitoring','log_card','inventory_card','logs','log_scroll',
                'run_badge','inventory','inventory_scope','inventory_scroll','status',
                'layout','workspace_split','log_split','inventory_split']
@@ -412,12 +415,13 @@ class GtkDesktop:
 
     # ==========================================
     # Function: Restore native geometry from outer columns down to individual card heights.
-    # Method: Wait a layout turn between hierarchy levels so parent resizing cannot redistribute restored child positions.
+    # Method: Complete native pending allocations between hierarchy levels so deferred parent resizing cannot shift restored positions.
     # ==========================================
     def restore_layout(self):
         if self.destroyed or self._layout_ready:
             return False
         g=self.g
+        g.gtk_container_check_resize(self.window)
         height=g.gtk_widget_get_allocated_height(self.w['workspace_split'])
         width=g.gtk_widget_get_allocated_width(self.w['monitoring'])
         if height<100 or width<100:
@@ -434,6 +438,7 @@ class GtkDesktop:
                 value=self.ui_preferences['panes'].get(name) if self._layout_use_saved else None
                 position=value if type(value) is int and 0<=value<=100000 else defaults[name]
                 g.gtk_paned_set_position(pane,position)
+            g.gtk_container_check_resize(self.window)
         finally:
             self._restoring_layout=False
         self._layout_phase+=1
@@ -610,7 +615,7 @@ class GtkDesktop:
     def bind_actions(self):
         g=self.g
         actions={'new_goal':self.add_goal,'goal_up':lambda:self.move_goal(-1),'goal_down':lambda:self.move_goal(1),
-                 'settings':self.open_settings,'save':self.save,'start':lambda:self.save(operation='run'),
+                 'settings':self.open_settings,'history':self.open_history,'save':self.save,'start':lambda:self.save(operation='run'),
                  'stop':self.controller.stop,'login':lambda:self.action('login'),'capture':self.controller.capture,
                  'dismiss_error':lambda:g.gtk_widget_hide(self.w['error_bar'])}
         for name,callback in actions.items():
@@ -969,7 +974,9 @@ class GtkDesktop:
                 tone='completed'
             elif status in {'unknown','needs_verification','conflict','expired'}:
                 tone='attention'
-            elif running and status in {'pending','preview','rejected'}:
+            elif (running and (not self.controller.active_identity or key==self.controller.active_identity
+                  or item.get('repeat_id')==self.controller.active_identity.removeprefix('rule:'))
+                  and status in {'pending','preview','rejected'}):
                 tone='running'
             elif item.get('repeat_id'):
                 tone='recurring'
@@ -1136,15 +1143,29 @@ class GtkDesktop:
         self.g.label(self.w['status'],'已创建下一天的独立目标 · 请保存设置')
 
     # ==========================================
-    # Function: Delete the clicked editable row while retaining durable records.
-    # Method: Use the pure model's identity-based order protection.
+    # Function: Delete the clicked target, including completed targets, while preserving order history.
+    # Method: Clean its disk-owned state on a worker before removing its in-memory draft and sidebar row.
     # ==========================================
     def delete_goal(self, identity):
         self.editing()
-        self.commit_current()
-        self.model.remove(identity)
-        self.render_sidebar()
-        self.load_editor()
+        related = set(self.model.replacements.get(identity,()))
+        self.saving=True
+        self.set_busy()
+
+        # ==========================================
+        # Function: Finish goal deletion without blocking the native event loop or touching unrelated drafts.
+        # Method: Return the removed identities, updated persisted configuration and durable states through the queue.
+        # ==========================================
+        def remove():
+            try:
+                removed=self.controller.delete_goal(identity,related)
+                state=self.controller.state()
+                self.controller.emit('goal_deleted',{'identity':identity,'removed':removed,
+                                                     'config':state['config'],'states':state['goals']})
+            except Exception as error:
+                self.controller.emit('gtk_save_failed',str(error))
+        self.save_worker=threading.Thread(target=remove,daemon=True,name='autoreserve-delete-goal')
+        self.save_worker.start()
 
     # ==========================================
     # Function: Reorder the selected target without changing its identity.
@@ -1216,6 +1237,11 @@ class GtkDesktop:
         g.gtk_widget_set_sensitive(self.date_entry,editable and not self.model.repeating())
         for name in ['save','start','new_goal','login','goal_up','goal_down']:
             g.gtk_widget_set_sensitive(self.w[name],not busy)
+        for name in ('save','start'):
+            g.gtk_widget_set_sensitive(self.w[name],not busy and self.model.get() is not None)
+        if self.history_window:
+            for button in self.history_delete_buttons:
+                g.gtk_widget_set_sensitive(button,not busy)
         g.gtk_widget_set_sensitive(self.w['settings'],True)
         self.set_settings_busy()
         for key,(row,name,detail,plus,delete) in self.sidebar_rows.items():
@@ -1240,21 +1266,28 @@ class GtkDesktop:
     # Function: Launch an explicitly requested browser action.
     # Method: Delegate to the existing serialized worker without blocking GTK.
     # ==========================================
-    def action(self, operation):
-        self.controller.start(operation)
+    def action(self, operation, identity=None):
+        if operation=='run':
+            self.controller.start(operation,goal_id=identity or self.model.selected)
+        else:
+            self.controller.start(operation)
+        self.g.gtk_widget_hide(self.w['error_bar'])
         if operation=='run':
             self.monitor_started=True
             self.render_inventory(None)
         self.set_busy()
 
     # ==========================================
-    # Function: Persist a validated working copy on a background thread.
-    # Method: Disable edits until the durable save completes, then dispatch the requested operation.
+    # Function: Persist only the selected target while retaining other unsaved and incomplete goal drafts.
+    # Method: Send a scoped projection to the worker; global settings and explicit save-all-on-exit use separate scopes.
     # ==========================================
-    def save(self, operation=None):
+    def save(self, operation=None, scope=None):
         self.editing()
         self.commit_current()
-        payload=self.model.payload()
+        scope=scope or ('all' if operation=='close' else 'goal')
+        identity=self.model.selected if scope=='goal' else None
+        payload=self.model.payload(identity) if scope!='settings' else dict(self.model.data)
+        replacements=set(self.model.replacements.get(identity,()))
         self.saving=True
         self.set_busy()
 
@@ -1264,13 +1297,138 @@ class GtkDesktop:
         # ==========================================
         def persist():
             try:
-                self.controller.save(payload)
-                states=self.controller.state()['goals']
-                self.controller.emit('gtk_saved',{'operation':operation,'states':states})
+                if scope=='goal':
+                    self.controller.save_goal(payload,identity,replacements)
+                elif scope=='settings':
+                    self.controller.save_settings(payload)
+                else:
+                    self.controller.save(payload)
+                state=self.controller.state()
+                self.controller.emit('gtk_saved',{'operation':operation,'identity':identity,'scope':scope,
+                                                  'states':state['goals'],'config':state['config']})
             except Exception as exc:
                 self.controller.emit('gtk_save_failed',str(exc))
 
         self.save_worker=threading.Thread(target=persist,daemon=True,name='autoreserve-save')
+        self.save_worker.start()
+
+    # ==========================================
+    # Function: Present every local order record and archived attempt in a close-only native history window.
+    # Method: Read SQLite asynchronously and display paginated, scrollable rows with explicit local-only deletion controls.
+    # ==========================================
+    def open_history(self):
+        if self.history_window:
+            self.g.gtk_window_present(self.history_window)
+            return
+        g=self.g
+        window,body,header=self.child_window('历史订单',780,650)
+        self.history_window=window
+        self.history_page=0
+        self.pack(body,self.label('本机保存的全部订单与提交记录。删除记录会解除对应时段的本地去重保护，不会取消网站订单。','caption',wrap=True))
+        self.history_caption=self.pack(body,self.label('正在读取历史订单…','caption'))
+        self.history_rows=self.box(True,10)
+        self.pack(body,self.scroller(self.history_rows,440),True)
+        footer=self.pack(body,self.box())
+        self.history_previous=self.pack(footer,self.button('上一页',lambda:self.history_turn(-1)))
+        self.history_next=self.pack(footer,self.button('下一页',lambda:self.history_turn(1)))
+        self.pack(footer,self.label('监测期间可查看，停止后可删除记录。','caption'),True)
+        self.pack(footer,self.button('刷新',self.refresh_history))
+        g.connect(window,'destroy',lambda *_:self.history_closed())
+        g.gtk_widget_show_all(window)
+        g.gtk_window_present(window)
+        self.refresh_history()
+
+    # ==========================================
+    # Function: Retire pending history updates when the floating window is closed.
+    # Method: Clear native pointers and advance a generation token before any queued response can repaint them.
+    # ==========================================
+    def history_closed(self):
+        self.history_window=None
+        self.history_delete_buttons=[]
+        self.history_generation+=1
+
+    # ==========================================
+    # Function: Load local order history without doing SQLite I/O in GTK signal handlers.
+    # Method: Tag each worker result so stale refreshes cannot repaint a newly opened window.
+    # ==========================================
+    def refresh_history(self):
+        if not self.history_window:
+            return
+        self.history_generation+=1
+        token=self.history_generation
+        self.g.label(self.history_caption,'正在读取历史订单…')
+
+        # ==========================================
+        # Function: Deliver a bounded local database read through the normal desktop event queue.
+        # Method: Keep all native row creation on the GTK thread and retain errors as visible UI messages.
+        # ==========================================
+        def read():
+            try:
+                self.controller.emit('history_loaded',{'token':token,'rows':self.controller.order_history()})
+            except Exception as error:
+                self.controller.emit('history_failed',{'token':token,'error':str(error)})
+        self.history_worker=threading.Thread(target=read,daemon=True,name='autoreserve-order-history')
+        self.history_worker.start()
+
+    # ==========================================
+    # Function: Move through all local history records without building thousands of native widgets in one frame.
+    # Method: Render fifty rows per page while keeping every record reachable through the same order window.
+    # ==========================================
+    def history_turn(self, delta):
+        self.history_page=max(0,min(self.history_page+delta,max(0,(len(self.history_records)-1)//50)))
+        self.render_history()
+
+    # ==========================================
+    # Function: Render order numbers, status, venue, court, booked date and times with an explicit delete action.
+    # Method: Build the current page from immutable database rows and disable deletion while an account worker is active.
+    # ==========================================
+    def render_history(self):
+        if not self.history_window:
+            return
+        g=self.g
+        g.clear(self.history_rows)
+        self.history_delete_buttons=[]
+        count=len(self.history_records)
+        self.history_page=min(self.history_page,max(0,(count-1)//50))
+        g.label(self.history_caption,f'{count} 条本地记录 · 第 {self.history_page+1} / {max(1,(count+49)//50)} 页')
+        if not count:
+            self.pack(self.history_rows,self.label('暂无订单记录。','muted'))
+        for record in self.history_records[self.history_page*50:(self.history_page+1)*50]:
+            detail=record['detail']
+            row=self.pack(self.history_rows,self.box(spacing=12,css='history-row'))
+            info=self.pack(row,self.box(True,5),True)
+            status=STATUS.get(record['status'],{'submit_intent':'提交结果待确认'}.get(record['status'],record['status']))
+            self.pack(info,self.label(f"订单 {detail.get('order_id') or '未取得订单号'} · {status}",wrap=True))
+            venue=' / '.join(str(detail.get(k) or '') for k in ('venue','sport','court')).strip(' /')
+            self.pack(info,self.label(f"{detail.get('date','日期未记录')} · {venue}\n{' / '.join(detail.get('slots',[]))}\n{detail.get('goal_name','')} · {record['updated_at']}",'caption',wrap=True))
+            button=self.pack(row,self.button('删除记录',lambda key=record['entry_id']:self.delete_history_record(key)))
+            g.gtk_widget_set_sensitive(button,not self.controller.busy and not self.saving)
+            self.history_delete_buttons.append(button)
+        g.gtk_widget_set_sensitive(self.history_previous,self.history_page>0)
+        g.gtk_widget_set_sensitive(self.history_next,(self.history_page+1)*50<count)
+        g.gtk_widget_show_all(self.history_rows)
+
+    # ==========================================
+    # Function: Explicitly remove one local order record and permit later monitoring of its released slot claims.
+    # Method: Serialize database mutation on a worker and refresh target statuses without discarding unrelated drafts.
+    # ==========================================
+    def delete_history_record(self, entry_id):
+        self.editing()
+        self.commit_current()
+        self.saving=True
+        self.set_busy()
+
+        # ==========================================
+        # Function: Delete the chosen task/attempt and publish refreshed durable goal status.
+        # Method: Leave remote orders untouched and let GTK update or close the history window independently.
+        # ==========================================
+        def remove():
+            try:
+                self.controller.delete_order(entry_id)
+                self.controller.emit('history_deleted',self.controller.state()['goals'])
+            except Exception as error:
+                self.controller.emit('gtk_save_failed',str(error))
+        self.save_worker=threading.Thread(target=remove,daemon=True,name='autoreserve-delete-order')
         self.save_worker.start()
 
     # ==========================================
@@ -1381,11 +1539,12 @@ class GtkDesktop:
             else:
                 value=g.text(widget).strip()
                 data[key]=(value or None) if key=='start_at' else value if key=='max_total_price' else float(value)/(100 if key=='poll_jitter_ratio' else 1)
-        self.model.data=asdict(config_from_dict(data))
+        checked=asdict(config_from_dict(data | {key:self.model.baseline[key] for key in ('goals','targets','repeat_rules')}))
+        self.model.data.update({key:value for key,value in checked.items() if key not in {'goals','targets','repeat_rules'}})
         self.model.dirty=True
         if self.settings_window:
             g.gtk_widget_set_sensitive(self.settings_save,False)
-        self.save()
+        self.save(scope='settings')
 
     # ==========================================
     # Function: Display recent logs continuously in the resizable execution-record card.
@@ -1466,7 +1625,9 @@ class GtkDesktop:
             window,body,header=self.child_window('预约成功',500,330)
             self.notice_window=window
             self.notice_label=self.pack(body,self.label('',wrap=True))
-            self.pack(body,self.label('订单已提交，未付款。其他未完成目标继续监测。','caption',wrap=True))
+            message=('订单已提交，未付款。当前重复模板继续按计划执行。' if (self.controller.active_identity or '').startswith('rule:')
+                     else '订单已提交，未付款。其他目标可在左栏分别选择启动。')
+            self.pack(body,self.label(message,'caption',wrap=True))
             self.pack(body,self.button('知道了',lambda:g.gtk_widget_destroy(window),'primary'))
             g.connect(window,'destroy',lambda *_:self.notice_destroyed())
         self.notices[identity]=f"{item.get('name','预约目标')}\n{detail.get('venue','')} · {detail.get('sport','')} · {detail.get('court','')}\n{detail.get('date','')}  {' / '.join(detail.get('slots',[]))}\n订单号：{detail['order_id']}"
@@ -1514,7 +1675,7 @@ class GtkDesktop:
                 self.model.states.update({s['id']:s for s in value})
                 self.render_sidebar()
             elif kind=='workspace':
-                self.model.data=value
+                self.model.merge_remote(value)
                 if not self.model.get():
                     self.model.selected=self.model.items()[0][0] if self.model.items() else None
                     self.load_editor()
@@ -1527,17 +1688,54 @@ class GtkDesktop:
                 self.g.label(self.w['auth'],value)
             elif kind=='gtk_saved':
                 self.saving=False
-                self.model.dirty=False
+                self.model.accept_saved(value['config'],value.get('identity'))
                 self.model.states={s['id']:s for s in value['states']}
                 self.render_sidebar()
-                self.g.label(self.w['status'],'设置已保存 · 仅点击开始监测后执行预约')
+                self.g.label(self.w['status'],'当前目标已保存 · 其他目标草稿保留' if value.get('scope')=='goal' else '设置已保存')
                 if self.settings_window:
                     self.g.gtk_widget_destroy(self.settings_window)
                 if value['operation']=='close':
                     self.destroy()
                     return False
                 if value['operation']:
-                    self.guard(lambda:self.action(value['operation']))
+                    self.guard(lambda:self.action(value['operation'],value.get('identity')))
+            elif kind=='goal_deleted':
+                self.saving=False
+                was_selected=self.model.selected
+                self.model.remove(value['identity'])
+                for rule in self.model.data['repeat_rules']:
+                    stored=next((r for r in value['config']['repeat_rules'] if r['id']==rule['id']),None)
+                    if stored:
+                        rule['skip_dates']=stored.get('skip_dates',[])
+                self.model.accept_saved(value['config'],removed=value['removed'])
+                self.model.states={s['id']:s for s in value['states']}
+                for identity in value['removed']:
+                    self._folds.pop(identity,None)
+                if self.controller.last_run_identity in value['removed']:
+                    self.logs=[]
+                    self.snapshot=None
+                    self.render_logs()
+                    self.render_inventory(None)
+                self.render_sidebar()
+                if self.model.selected!=was_selected:
+                    self.load_editor()
+            elif kind=='history_loaded':
+                if self.history_window and value['token']==self.history_generation:
+                    self.history_records=value['rows']
+                    self.render_history()
+            elif kind=='history_failed':
+                if self.history_window and value['token']==self.history_generation:
+                    self.g.label(self.history_caption,value['error'])
+            elif kind=='history_deleted':
+                self.saving=False
+                self.model.states={s['id']:s for s in value}
+                self.g.gtk_widget_hide(self.w['error_bar'])
+                self.snapshot=None
+                self.next_read_at=None
+                self.render_inventory(None)
+                self.render_sidebar()
+                self.load_editor()
+                self.refresh_history()
             elif kind=='gtk_save_failed':
                 self.saving=False
                 self.error(value)
@@ -1597,7 +1795,7 @@ class GtkDesktop:
         row=self.pack(body,self.box())
         self.pack(row,self.button('取消',lambda:g.gtk_widget_destroy(window)))
         self.pack(row,self.button('直接退出',self.destroy))
-        self.pack(row,self.button('保存并退出',lambda:self.save(operation='close'),'primary'))
+        self.pack(row,self.button('保存全部草稿并退出',lambda:self.save(operation='close'),'primary'))
         g.connect(window,'destroy',lambda *_:setattr(self,'confirm_window',None))
         g.gtk_widget_show_all(window)
 
@@ -1608,7 +1806,7 @@ class GtkDesktop:
     def destroy(self):
         if self.destroyed:
             return
-        for window in [self.settings_window,self.notice_window,self.confirm_window]:
+        for window in [self.settings_window,self.notice_window,self.confirm_window,self.history_window]:
             if window:
                 self.g.gtk_widget_destroy(window)
         self.g.gtk_widget_destroy(self.window)

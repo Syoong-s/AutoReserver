@@ -3,6 +3,7 @@
 import ctypes as C
 import json
 from copy import deepcopy
+from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 import os
@@ -16,7 +17,7 @@ from zoneinfo import ZoneInfo
 from autoreserve.catalog import ANY_COURT
 from autoreserve.config import load_config,save_config
 from autoreserve.desktop_controller import DesktopController,context_key
-from autoreserve.state import private_json
+from autoreserve.state import Journal, private_json
 from test_catalog import native_config,directory_fixture
 
 
@@ -78,6 +79,8 @@ class GtkWorkspaceTests(unittest.TestCase):
             self.controller.worker.join(2)
         if hasattr(self.app,'save_worker'):
             self.app.save_worker.join(2)
+        if hasattr(self.app,'history_worker'):
+            self.app.history_worker.join(2)
         self.app.destroy()
         self.pump(.06)
         self.no_browser.stop()
@@ -691,7 +694,9 @@ class GtkWorkspaceTests(unittest.TestCase):
         app.save_worker.join(2)
         self.pump(.12)
         saved=load_config(self.controller.config_path)
-        self.assertTrue(saved.goals[0].rush.enabled)
+        self.assertFalse(saved.goals[0].rush.enabled)
+        self.assertTrue(next(g for g in app.model.data['goals'] if g['id']==source)['rush']['enabled'])
+        self.assertTrue(app.model.dirty)
         self.assertTrue(saved.repeat_rules[0].rush.enabled)
         self.assertEqual(saved.repeat_rules[0].rush.prewarm_seconds,60)
         self.assertEqual(saved.repeat_rules[0].rush.at,release.strftime('%H:%M:%S'))
@@ -716,3 +721,104 @@ class GtkWorkspaceTests(unittest.TestCase):
         self.assertFalse(g.gtk_expander_get_expanded(app.rush_expander))
         self.controller.busy,self.controller.operation=False,'idle'
         app.model.dirty=False
+
+    # ==========================================
+    # Function: Keep unsaved targets out of a selected-goal save and retain them as working drafts.
+    # Method: Add another incomplete goal, then save through the actual native toolbar button.
+    # ==========================================
+    def test_selected_toolbar_save_retains_unrelated_incomplete_draft(self):
+        app,g=self.app,self.g
+        source=app.model.selected
+        g.text(app.name_entry,'只保存此目标')
+        app.add_goal()
+        other=app.model.selected
+        g.text(app.name_entry,'尚未选择场馆的草稿')
+        app.model.selected=source
+        app.load_editor()
+        app.render_sidebar()
+        g.gtk_button_clicked(app.w['save'])
+        app.save_worker.join(2)
+        self.wait_layout(lambda:not app.saving)
+        saved=load_config(self.controller.config_path)
+        self.assertEqual([goal.id for goal in saved.goals],[source])
+        self.assertEqual(saved.goals[0].name,'只保存此目标')
+        self.assertIsNotNone(app.model.get(other))
+        self.assertTrue(app.model.dirty)
+        self.assertEqual(app.errors,[])
+
+    # ==========================================
+    # Function: Bind native monitor startup to the saved target even if the selected row changes during disk I/O.
+    # Method: Trigger the real save/start sequence and inspect the controller scope without opening a browser.
+    # ==========================================
+    def test_toolbar_start_uses_captured_goal_identity(self):
+        app,g=self.app,self.g
+        source=app.model.selected
+        with patch.object(self.controller,'start') as start:
+            g.gtk_button_clicked(app.w['start'])
+            app.save_worker.join(2)
+            self.wait_layout(lambda:not app.saving)
+            start.assert_called_once_with('run',goal_id=source)
+        self.assertEqual(app.errors,[])
+
+    # ==========================================
+    # Function: Delete a submitted goal through the sidebar while retaining its order in the native history window.
+    # Method: Seed a real order, click both deletion actions and verify their separate persistent effects.
+    # ==========================================
+    def test_completed_sidebar_delete_and_history_record_delete(self):
+        app,g=self.app,self.g
+        config=load_config(self.controller.config_path)
+        goal=config.goals[0]
+        target=replace(goal.candidates[0],court='场地1')
+        journal=Journal(self.controller.auth_dir/'journal.sqlite3')
+        try:
+            key=config.goal_key(goal)
+            journal.arm(config.for_target(target),target,key)
+            journal.update(key,'submitted',{'order_id':'GTK-ORDER','goal_id':goal.id,'goal_name':goal.name})
+        finally:
+            journal.close()
+        app.model.states={s['id']:s for s in self.controller.state()['goals']}
+        app.load_editor()
+        app.render_sidebar()
+        g.gtk_button_clicked(app.sidebar_rows[goal.id][4])
+        app.save_worker.join(2)
+        self.wait_layout(lambda:not app.saving)
+        self.assertEqual(load_config(self.controller.config_path).goals,[])
+        self.assertIsNone(app.model.get(goal.id))
+        self.assertEqual(len(self.controller.order_history()),1)
+        g.gtk_button_clicked(app.w['history'])
+        app.history_worker.join(2)
+        self.wait_layout(lambda:len(app.history_records)==1)
+        self.assertTrue(g.gtk_widget_get_mapped(app.history_window))
+        self.assertEqual(g.gtk_header_bar_get_decoration_layout(g.gtk_window_get_titlebar(app.history_window)),b':close')
+        self.assertEqual(app.history_records[0]['detail']['order_id'],'GTK-ORDER')
+        g.gtk_button_clicked(app.history_delete_buttons[0])
+        app.save_worker.join(2)
+        self.wait_layout(lambda:not app.saving and not app.history_records)
+        self.assertEqual(self.controller.order_history(),[])
+        self.assertEqual(app.errors,[])
+
+    # ==========================================
+    # Function: Discard a late history query response after its native floating window has closed.
+    # Method: Delay the database boundary, close the window and finish the worker before pumping the queued result.
+    # ==========================================
+    def test_closed_history_window_ignores_inflight_read(self):
+        app,g=self.app,self.g
+        gate=threading.Event()
+
+        # ==========================================
+        # Function: Model a delayed history read without retaining native widget pointers in a worker.
+        # Method: Wait on the fixture event and return a row that must never reach the closed view.
+        # ==========================================
+        def slow():
+            gate.wait(1)
+            return [{'entry_id':'task:late','status':'unknown','detail':{},'updated_at':'2026-10-28'}]
+
+        with patch.object(self.controller,'order_history',side_effect=slow):
+            app.open_history()
+            g.gtk_widget_destroy(app.history_window)
+            gate.set()
+            app.history_worker.join(2)
+            self.pump(.12)
+        self.assertIsNone(app.history_window)
+        self.assertEqual(app.history_records,[])
+        self.assertEqual(app.errors,[])

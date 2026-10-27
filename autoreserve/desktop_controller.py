@@ -10,12 +10,13 @@ import threading
 import time
 
 from .browser import open_browser, origin_of, save_session
-from .catalog import DirectoryCache, DirectoryClient, LoginRequired, block_availability, booking_url
-from .config import BookingContext, HOME_URL, Target, load_config, save_config, parse_start
+from .catalog import ANY_COURT, DirectoryCache, DirectoryClient, LoginRequired, block_availability, booking_url
+from .config import BookingContext, HOME_URL, Target, load_config, save_config, parse_start, config_from_dict
 from .monitoring import GridReadStalled
 from .gui import Controller
 from .runner import evidence, run_reservation
 from .state import Journal, account_lock, private_json
+from .goal_storage import clear_goal_files, goal_directory
 
 
 # ==========================================
@@ -38,6 +39,8 @@ class DesktopController(Controller):
     def __init__(self, config_path, auth_dir):
         self.events = queue.SimpleQueue()
         super().__init__(config_path, auth_dir)
+        self.active_identity = None
+        self.last_run_identity = None
         self.merge_workspace()
         journal = Journal(self.auth_dir / "journal.sqlite3")
         try:
@@ -131,14 +134,128 @@ class DesktopController(Controller):
     # ==========================================
     def log(self, message):
         super().log(message)
+        self.logs[-1]['identity'] = self.active_identity
         self.emit("log", self.logs[-1].copy())
+
+    # ==========================================
+    # Function: Save one goal or template without applying edits from any other working draft.
+    # Method: Merge the selected validated projection into the current disk config and remove only its converted source IDs.
+    # ==========================================
+    def save_goal(self, data, identity, removed=()):
+        with self.lock:
+            if self.busy:
+                raise ValueError('请先停止当前操作，再保存目标')
+            projection = config_from_dict(data)
+            config = load_config(self.config_path)
+            remove = set(removed) - {identity}
+            removed_keys={config.goal_key(g) for g in config.goals if g.id in remove}
+            previous_live = [g for g in self.live_goals if g.get('id') not in remove | {identity}]
+            config.goals = [g for g in config.goals if g.id not in remove]
+            config.repeat_rules = [r for r in config.repeat_rules if 'rule:'+r.id not in remove]
+            if identity.startswith('rule:'):
+                if len(projection.repeat_rules)!=1 or projection.repeat_rules[0].id!=identity[5:] or projection.goals:
+                    raise ValueError('保存内容必须只包含当前重复目标')
+                replacement = projection.repeat_rules[0]
+                config.repeat_rules = [replacement if r.id==replacement.id else r for r in config.repeat_rules]
+                if not any(r.id==replacement.id for r in config.repeat_rules):
+                    config.repeat_rules.append(replacement)
+            else:
+                if len(projection.goals)!=1 or projection.goals[0].id!=identity or projection.repeat_rules:
+                    raise ValueError('保存内容必须只包含当前目标')
+                replacement = projection.goals[0]
+                config.goals = [replacement if g.id==replacement.id else g for g in config.goals]
+                if not any(g.id==replacement.id for g in config.goals):
+                    config.goals.append(replacement)
+            self.save(asdict(config))
+            self.live_goals = previous_live
+            if remove:
+                clear_goal_files(self.config_path,self.auth_dir,remove,removed_keys)
+
+    # ==========================================
+    # Function: Save explicit global execution settings without committing target drafts.
+    # Method: Retain all persisted goal/template collections and validate only the proposed shared preferences.
+    # ==========================================
+    def save_settings(self, data):
+        with self.lock:
+            previous = asdict(load_config(self.config_path))
+            proposed = dict(data)
+            for key in ('goals','targets','repeat_rules'):
+                proposed[key] = previous[key]
+            self.save(proposed)
+
+    # ==========================================
+    # Function: Remove a target and all owned local progress while retaining every order record.
+    # Method: Persist scoped removal, suppress deleted daily occurrences and scrub only known goal-owned files.
+    # ==========================================
+    def delete_goal(self, identity, related=()):
+        with self.lock:
+            if self.busy:
+                raise ValueError('请先停止监测，再删除目标')
+            config = load_config(self.config_path)
+            removed = {identity,*related}
+            rules = {value[5:] for value in removed if value.startswith('rule:')}
+            removed.update(g.id for g in config.goals if g.repeat_id in rules)
+            removed_keys={config.goal_key(g) for g in config.goals if g.id in removed}
+            for goal in config.goals:
+                if goal.id not in removed or not goal.repeat_id or goal.repeat_id in rules:
+                    continue
+                rule = next((r for r in config.repeat_rules if r.id==goal.repeat_id),None)
+                prefix = 'daily-'+goal.repeat_id+'-'
+                if rule and goal.id.startswith(prefix):
+                    day = goal.id[len(prefix):]
+                    rule.skip_dates = sorted(set(rule.skip_dates) | {day})[-366:]
+            config.goals = [g for g in config.goals if g.id not in removed]
+            config.repeat_rules = [r for r in config.repeat_rules if r.id not in rules]
+            config.validate()
+            with account_lock(self.auth_dir):
+                clear_goal_files(self.config_path,self.auth_dir,removed,removed_keys)
+                save_config(config,self.config_path)
+            self.live_goals = [g for g in self.live_goals if g.get('id') not in removed]
+            self._completed_seen = {item for item in self._completed_seen if item[0] not in removed}
+            self.logs = [row for row in self.logs if row.get('identity') not in removed]
+            if self.last_run_identity in removed:
+                self.snapshot,self.result,self.monitor = None,None,{}
+            self.log('目标已删除，关联状态已清理；订单保留在「历史订单」')
+            return removed
+
+    # ==========================================
+    # Function: Read all local order and archived attempt records without browser or website access.
+    # Method: Use a short-lived SQLite connection on the caller's own thread.
+    # ==========================================
+    def order_history(self):
+        with self.lock:
+            journal = Journal(self.auth_dir/'journal.sqlite3')
+            try:
+                return journal.history()
+            finally:
+                journal.close()
+
+    # ==========================================
+    # Function: Delete the selected local order record and release its exact duplicate-booking claims.
+    # Method: Serialize against account workers, retain unrelated records and discard stale conflict status after deletion.
+    # ==========================================
+    def delete_order(self, entry_id):
+        with self.lock:
+            if self.busy:
+                raise ValueError('请先停止监测，再删除订单记录')
+            with account_lock(self.auth_dir):
+                journal = Journal(self.auth_dir/'journal.sqlite3')
+                try:
+                    journal.delete_history(entry_id)
+                finally:
+                    journal.close()
+            self.live_goals,self.result,self.monitor,self.snapshot = [],None,{},None
+            self.log('本地订单记录已删除，可以重新监测该时段；网站订单未取消')
+            self.emit('states',self.state()['goals'])
 
     # ==========================================
     # Function: Remember exact court labels learned during active monitoring.
     # Method: Update a separate names cache only when names change, never refresh metadata.
     # ==========================================
     def progress(self, event):
-        super().progress(event)
+        incoming = {g['id'] for g in event.get('goals',[])}
+        combined = [g for g in self.live_goals if g['id'] not in incoming] + event.get('goals',[])
+        super().progress(event | {'goals':combined} if 'goals' in event else event)
         shot = event.get("snapshot")
         if shot and shot.get("columns"):
             key = context_key(shot["venue"], shot["sport"])
@@ -181,10 +298,10 @@ class DesktopController(Controller):
                            venue=venue["name"], sport=sport_name)
 
     # ==========================================
-    # Function: Start an explicitly authorized login, one-time catalog read, or monitor.
-    # Method: Keep cache hits entirely offline and serialize account/browser actions.
+    # Function: Start an explicitly authorized login, metadata read, or selected-goal monitoring session.
+    # Method: Scope worker configurations before validation, explain local order conflicts and serialize account actions.
     # ==========================================
-    def start(self, operation, date=None):
+    def start(self, operation, date=None, goal_id=None):
         if operation not in {"login", "catalog", "run"}:
             raise ValueError("客户端仅在启动监测后读取空位")
         with self.lock:
@@ -198,11 +315,46 @@ class DesktopController(Controller):
                     return
             config = load_config(self.config_path)
             if operation == "run":
+                if goal_id is not None:
+                    if goal_id.startswith('rule:'):
+                        rule = next((r for r in config.repeat_rules if r.id==goal_id[5:]),None)
+                        if rule is None or not rule.enabled:
+                            raise ValueError('当前重复目标不存在或已暂停，请先开启重复预约')
+                        config = replace(config,goals=[g for g in config.goals if g.repeat_id==rule.id],repeat_rules=[rule],targets=[])
+                    else:
+                        goal = next((g for g in config.goals if g.id==goal_id),None)
+                        if goal is None:
+                            raise ValueError('请先保存当前目标')
+                        config = replace(config,goals=[goal],repeat_rules=[],targets=[])
                 config.validate(require_targets=True)
             if operation != "login" and not (self.auth_dir / "session.json").exists():
                 raise ValueError("请先在网站主界面登录，并点击保存登录")
+            if operation=='run' and goal_id is not None and not goal_id.startswith('rule:'):
+                journal = Journal(self.auth_dir/'journal.sqlite3')
+                try:
+                    for goal in config.goals:
+                        record = journal.record(config.goal_key(goal))
+                        if record and record['status']=='rejected':
+                            continue
+                        conflicts = []
+                        for target in goal.candidates:
+                            if target.court==ANY_COURT:
+                                break
+                            try:
+                                journal.ensure_new(config.for_target(target),config.goal_key(goal))
+                            except RuntimeError as error:
+                                conflicts.append(str(error))
+                        if len(conflicts)==len(goal.candidates):
+                            raise ValueError(conflicts[0])
+                finally:
+                    journal.close()
             self.busy, self.operation, self.result = True, operation, None
-            self.live_goals, self.monitor = [], {}
+            self.active_identity = goal_id if operation=='run' else None
+            if operation=='run':
+                self.last_run_identity = self.active_identity
+            active_ids = {g.id for g in config.goals}
+            self.live_goals = [g for g in self.live_goals if goal_id is not None and g['id'] not in active_ids]
+            self.monitor = {}
             if operation == 'run':
                 self.snapshot = None
             self.stop_event.clear()
@@ -274,8 +426,16 @@ class DesktopController(Controller):
     # Method: Save on the browser worker and publish the new local workspace.
     # ==========================================
     def persist_daily(self, config):
-        save_config(config, self.config_path)
-        self.emit("workspace", asdict(config))
+        with self.lock:
+            if self.active_identity and self.active_identity.startswith('rule:'):
+                full = load_config(self.config_path)
+                rule_id = self.active_identity[5:]
+                full.goals = [g for g in full.goals if g.repeat_id!=rule_id]+config.goals
+                full.validate()
+            else:
+                full = config
+            save_config(full, self.config_path)
+            self.emit("workspace", asdict(full))
 
     # ==========================================
     # Function: Recover one stuck browser without replaying submitted or uncertain orders.
@@ -336,7 +496,8 @@ class DesktopController(Controller):
     # Method: Persist daily occurrences on this worker before monitoring their shared inventory.
     # ==========================================
     def work(self, operation, config, date=None):
-        artifacts = self.config_path.parent / "artifacts" / datetime.now().strftime("native-%Y%m%d-%H%M%S-%f")
+        base = goal_directory(self.config_path,self.active_identity) if self.active_identity else self.config_path.parent/'artifacts'
+        artifacts = base / datetime.now().strftime("native-%Y%m%d-%H%M%S-%f")
         try:
             with account_lock(self.auth_dir):
                 if operation=='run':

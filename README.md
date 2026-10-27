@@ -20,6 +20,7 @@ AutoReserve combines a high-performance GTK 3 desktop interface with an automate
 - **Real-Time Monitoring & Execution Logs**: Always-visible panels for rolling execution logs (latest 50 lines) and the latest availability snapshot, completely separate from the editor.
 - **Clear Status & Native Notifications**: Color-coded sidebar badges (monitoring, weekly repeat, pending, completed, attention needed) and non-blocking native popup dialogs displaying full order details upon successful booking.
 - **Safety, Rate Limiting & Duplicate Protection**: Shared global request budgeting and automatic exponential backoff on server load. A persistent local transaction journal prevents duplicate reservations across client restarts.
+- **Independent Goals & Order History**: Save/start only the selected goal, retain other drafts, delete completed goals, and review or delete local order records in the sidebar's **历史订单** window.
 - **Zero-Cloud Privacy**: Credentials, session tokens, configurations, and order journals remain strictly stored on your local machine.
 
 ---
@@ -49,7 +50,13 @@ Download the portable archive matching your operating system from the repository
    - **Weekly Recurrence**: Click **Set as Repeat Goal (设为重复目标)** to convert the goal into a template, then choose the execution weekdays, trigger time, and target date offset.
    - **Timed-Release (Rush) Mode**: Toggle the **Rush Mode (抢购模式)** switch in the top-right corner. Enter the release date and time (accurate to the second), and configure preparation lead times. (See [Rush Mode Guide](docs/RUSH.md)).
 4. **Start Monitoring**:
-   Click **Save Settings (保存设置)**, then click **Start Monitoring (开始监测)**. Keep your computer and network connected. When a reservation succeeds, a native notification dialog will pop up. Visit the official portal promptly to pay.
+   Select a goal in the sidebar, click **Save Goal (保存目标)**, then **Start Monitoring (开始监测)**. Both actions apply only to that goal; other drafts remain untouched. Selecting a weekly template starts only that template and its own occurrences. Keep your computer and network connected. When a reservation succeeds, a native notification dialog will pop up. Visit the official portal promptly to pay.
+
+### 3. Remove Goals and Manage Order History
+
+The sidebar **×** removes a target even after an order was submitted. Its draft, monitoring state and owned evidence/cache files are cleaned; its order remains in **历史订单** at the bottom of the sidebar. Deleting a weekly template also removes its generated targets. Deleting one generated occurrence excludes that execution date from future generation without changing the rest of the template.
+
+If an identical venue/court/date/time is blocked by a previous submission, open **历史订单**, review the order number and delete the corresponding **local record** to release its duplicate guard before starting a new goal. This does **not** cancel the website's order. Unrelated records and their duplicate guards remain intact. History can be viewed during monitoring; stop the worker before deleting records. Display and execution preferences remain shared settings; target toolbar actions are scoped to the selection.
 
 ---
 

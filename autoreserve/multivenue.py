@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 from .monitoring import AccessDenied, ReadDeferred
 from .catalog import LoginRequired
 from .repeat import materialize_daily, next_daily
-from .runner import evidence, submit_once, wait_for_start
+from .runner import attention_message, evidence, submit_once, wait_for_start
 from .sjtu import GridNotReady, SjtuPage, candidate_cells, expand_candidates
 from .rush import RushBoundary, RushCoordinator
 
@@ -187,6 +187,7 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
     # ==========================================
     def best(goal, snapshots, restricted=None):
         expanded, conflicts, unresolved = 0, 0, False
+        conflict_message = None
         for candidate in goal.candidates:
             context = target_context(config, candidate)
             if restricted is not None and context != restricted:
@@ -204,13 +205,14 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
                 expanded += 1
                 try:
                     journal.ensure_new(config.for_target(target), config.goal_key(goal))
-                except RuntimeError:
+                except RuntimeError as error:
                     conflicts += 1
+                    conflict_message = str(error)
                     continue
                 if candidate_cells(shot, target) is not None:
                     return target
         if restricted is None and not unresolved and expanded and conflicts == expanded:
-            states[goal.id].update(status="conflict", watch_state="blocked", detail={"message": "全部候选已有订单记录，请先核对"})
+            states[goal.id].update(status="conflict", watch_state="blocked", detail={"message": conflict_message or '请在左栏「历史订单」查看该时段的提交记录'})
         return None
 
     if not recurring and all(s["status"] == "submitted" for s in states.values()):
@@ -292,7 +294,7 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
                             daily_wait_message = message
                         page.wait_for_timeout(250)
                         continue
-                    return finish("needs_attention", "剩余目标需要人工核对，全部进度已保留")
+                    return finish("needs_attention",attention_message(states))
                 groups = list(dict.fromkeys((target_context(config, t), t.date) for g in pending for t in g.candidates))
                 snapshots, read_failed, rush_fast = {}, False, False
                 for context, day in groups:
@@ -387,7 +389,7 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
                 if not submit:
                     return finish("pending" if read_failed else "preview", "预览已结束，未提交订单")
                 if not recurring and not any(s["status"] in {"pending", "rejected"} for s in states.values()):
-                    return finish("needs_attention", "尚有目标需要人工核对，进度已保留")
+                    return finish("needs_attention",attention_message(states))
                 if not recurring and not config.monitor_until_complete and time.monotonic() >= deadline:
                     return finish("pending", "本轮监测到时，未完成目标已保留")
                 seed = None

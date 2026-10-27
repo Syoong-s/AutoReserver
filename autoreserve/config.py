@@ -178,6 +178,7 @@ class RepeatRule:
     enabled: bool = True
     weekdays: list[int] = field(default_factory=lambda: list(range(7)))
     rush: RushSettings = field(default_factory=RushSettings)
+    skip_dates: list[str] = field(default_factory=list)
 
     # ==========================================
     # Function: Reject ambiguous schedules before saving or starting monitoring.
@@ -189,6 +190,10 @@ class RepeatRule:
         if not isinstance(self.rush, RushSettings):
             raise ValueError('抢购设置格式错误')
         self.rush.validate(repeating=True)
+        if (not isinstance(self.skip_dates,list) or len(self.skip_dates)>366
+                or any(not isinstance(day,str) or date.fromisoformat(day).isoformat()!=day for day in self.skip_dates)
+                or len(set(self.skip_dates))!=len(self.skip_dates)):
+            raise ValueError('重复目标跳过日期必须是有效且不重复的日期列表')
         if not isinstance(self.id, str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,40}", self.id):
             raise ValueError("重复规则 ID 无效")
         Goal(self.id, self.name, self.candidates)

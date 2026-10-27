@@ -90,11 +90,14 @@ class Journal:
     def ensure_new(self, config, task_key=None):
         row = self.db.execute("SELECT status FROM tasks WHERE task_key=?", (task_key or config.task_key(),)).fetchone()
         if row:
-            raise RuntimeError(f"此任务已有提交记录（{row[0]}），请先核对网站“我的订单”和 journal")
+            raise RuntimeError(f"此任务已有提交记录（{row[0]}），请打开左栏「历史订单」查看；需要重新监测时可删除对应本地记录")
         for target in config.targets:
             for key in config.slot_keys(target):
-                if self.db.execute("SELECT 1 FROM slots WHERE slot_key=?", (key,)).fetchone():
-                    raise RuntimeError("候选包含曾提交的时段，请先核对网站订单，避免重复预约")
+                row = self.db.execute("SELECT t.detail FROM slots s JOIN tasks t ON t.task_key=s.task_key WHERE s.slot_key=?", (key,)).fetchone()
+                if row:
+                    detail = json.loads(row[0])
+                    order = str(detail.get('order_id') or detail.get('goal_name') or '已有提交记录')
+                    raise RuntimeError(f"候选包含曾提交的时段：{target.date} {target.court} {' / '.join(target.slots)}，记录 {order}。请打开左栏「历史订单」查看；需要重新监测时可删除对应本地记录")
 
     # ==========================================
     # Function: Arm the submission latch before the final click.
@@ -107,6 +110,7 @@ class Journal:
             self.db.execute("INSERT INTO tasks VALUES (?, ?, ?, ?)", (
                 key, "submit_intent", json.dumps({
                     "date": target.date, "court": target.court, "slots": target.slots,
+                    "venue": config.for_target(target).venue, "sport": config.for_target(target).sport,
                 }, ensure_ascii=False), datetime.now(timezone.utc).isoformat(),
             ))
             for slot_key in config.slot_keys(target):
@@ -174,3 +178,32 @@ class Journal:
     def entries(self):
         return [{"task_key": key, "status": status, "detail": json.loads(detail), "updated_at": stamp}
                 for key, status, detail, stamp in self.db.execute("SELECT * FROM tasks ORDER BY updated_at DESC")]
+
+    # ==========================================
+    # Function: Expose all current and archived local order attempts to the history window.
+    # Method: Give task rows and archived attempts distinct stable deletion identities without changing booking keys.
+    # ==========================================
+    def history(self):
+        current = [dict(row, entry_id='task:'+row['task_key']) for row in self.entries()]
+        previous = [{'entry_id':f'attempt:{rowid}', 'task_key':key, 'status':status,
+                     'detail':json.loads(detail), 'updated_at':stamp}
+                    for rowid,key,status,detail,stamp in self.db.execute('SELECT rowid,* FROM attempts')]
+        return sorted(current+previous, key=lambda row:row['updated_at'], reverse=True)
+
+    # ==========================================
+    # Function: Remove an explicitly selected local history record and its corresponding duplicate-booking claims.
+    # Method: Delete task/slot rows atomically or remove only the selected archived attempt; never contact the website.
+    # ==========================================
+    def delete_history(self, entry_id):
+        if not isinstance(entry_id,str):
+            raise ValueError('订单记录标识无效')
+        kind,separator,key = entry_id.partition(':')
+        if not separator or not key:
+            raise ValueError('订单记录标识无效')
+        with self.db:
+            if kind == 'task':
+                self.db.execute('DELETE FROM slots WHERE task_key=?',(key,))
+                return self.db.execute('DELETE FROM tasks WHERE task_key=?',(key,)).rowcount > 0
+            if kind == 'attempt' and key.isdecimal():
+                return self.db.execute('DELETE FROM attempts WHERE rowid=?',(int(key),)).rowcount > 0
+        raise ValueError('订单记录标识无效')

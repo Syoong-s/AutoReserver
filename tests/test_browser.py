@@ -133,6 +133,29 @@ class BrowserTests(unittest.TestCase):
             self.assertEqual(self.journal.entries(), [])
 
     # ==========================================
+    # Function: Make duplicate-slot conflicts actionable and permit a fresh goal after explicit local-history removal.
+    # Method: Submit once on the loopback fixture, verify a blocked second goal and then successfully retry after deleting its guard.
+    # ==========================================
+    def test_history_delete_allows_new_goal_for_identical_slot(self):
+        first=Goal('history-first','原目标',[self.target])
+        retry=Goal('history-retry','重新预约',[self.target])
+        with self.browser(goals=[first],targets=[]) as (config,_,page):
+            result=run_reservation(page,config,self.journal,self.root/'artifacts',True)
+            self.assertEqual(result['status'],'completed')
+            key=config.goal_key(first)
+        with self.browser(goals=[retry],targets=[]) as (config,_,page):
+            result=run_reservation(page,config,self.journal,self.root/'artifacts',True)
+            self.assertEqual(result['status'],'needs_attention')
+            self.assertIn('历史订单',result['message'])
+            self.assertEqual(page.evaluate('submitClicks'),0)
+        self.journal.delete_history('task:'+key)
+        with self.browser(goals=[retry],targets=[]) as (config,_,page):
+            result=run_reservation(page,config,self.journal,self.root/'artifacts',True)
+            self.assertEqual(result['status'],'completed')
+            self.assertEqual(page.evaluate('submitClicks'),1)
+            self.assertEqual(page.evaluate('payClicks'),0)
+
+    # ==========================================
     # Function: Verify multi-hour bookings are selected as a group.
     # Method: Require both consecutive cells before the single final submission.
     # ==========================================

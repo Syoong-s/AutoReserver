@@ -157,11 +157,22 @@
               </packing>
             </child>
             <child>
-              <object class="GtkButton" id="settings">
-                <property name="label">设置</property>
-                <style>
-                  <class name="secondary" />
-                </style>
+              <object class="GtkBox">
+                <property name="spacing">8</property>
+                <child>
+                  <object class="GtkButton" id="history">
+                    <property name="label">历史订单</property>
+                    <style><class name="secondary" /></style>
+                  </object>
+                  <packing><property name="expand">True</property><property name="fill">True</property></packing>
+                </child>
+                <child>
+                  <object class="GtkButton" id="settings">
+                    <property name="label">设置</property>
+                    <style><class name="secondary" /></style>
+                  </object>
+                  <packing><property name="expand">True</property><property name="fill">True</property></packing>
+                </child>
               </object>
               <packing>
                 <property name="expand">False</property>
@@ -277,7 +288,8 @@
                 </child>
                 <child>
                   <object class="GtkButton" id="save">
-                    <property name="label">保存设置</property>
+                    <property name="label">保存目标</property>
+                    <property name="tooltip-text">仅保存当前选中的预约目标，保留其他目标的草稿</property>
                     <property name="valign">center</property>
                     <style>
                       <class name="secondary" />
@@ -291,6 +303,7 @@
                 <child>
                   <object class="GtkButton" id="start">
                     <property name="label">开始监测  →</property>
+                    <property name="tooltip-text">仅启动当前选中的预约目标或重复模板</property>
                     <property name="valign">center</property>
                     <style>
                       <class name="primary" />

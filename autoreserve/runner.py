@@ -17,6 +17,19 @@ LOG = logging.getLogger(__name__)
 
 
 # ==========================================
+# Function: Explain blocked goals with an actual order-history or verification action.
+# Method: Preserve detailed conflict messages and distinguish expired dates from uncertain orders and challenges.
+# ==========================================
+def attention_message(states):
+    fallbacks={'expired':'预约日期已过，请新建未来日期的目标',
+               'needs_verification':'请在预约浏览器中完成验证',
+               'unknown':'请核对网站「我的订单」，并在左栏「历史订单」查看对应本地记录',
+               'submit_intent':'提交结果尚未确认，请先核对网站订单和左栏「历史订单」'}
+    return '；'.join(s['name']+'：'+s.get('detail',{}).get('message',fallbacks.get(s['status'],'请打开左栏「历史订单」查看对应的本地提交记录'))
+                    for s in states.values() if s['status']!='submitted')
+
+
+# ==========================================
 # Function: Preserve outcome evidence without causing a retry.
 # Method: Always save result JSON; capture a screenshot on a best-effort basis.
 # ==========================================
@@ -309,8 +322,7 @@ def run_plan(page, config, journal, artifacts, submit=False, progress=None, stop
             if candidate_cells(shot, target) is not None:
                 return target
         if candidates and conflicts == len(candidates):
-            state.update(status="conflict", watch_state="blocked",
-                         detail={"message": "全部候选已有订单记录，请先核对"})
+            state.update(status="conflict", watch_state="blocked")
         return None
 
     if all(s["status"] == "submitted" for s in states.values()):
@@ -347,7 +359,7 @@ def run_plan(page, config, journal, artifacts, submit=False, progress=None, stop
             if not pending:
                 if all(s["status"] == "submitted" for s in states.values()):
                     return finish("completed", "全部预约目标已提交成功；未执行付款")
-                return finish("needs_attention", "仍有目标需要人工核对，已保留全部进度")
+                return finish("needs_attention", attention_message(states))
             if needs_load or time.monotonic() - last_calendar >= config.calendar_refresh_seconds:
                 last_calendar=time.monotonic()
                 seed = read(load_booking)
@@ -453,7 +465,7 @@ def run_plan(page, config, journal, artifacts, submit=False, progress=None, stop
             if all(s["status"] == "submitted" for s in states.values()):
                 return finish("completed", "所有预约目标均已提交成功，监测结束；未执行付款")
             if not any(s["status"] in {"pending", "rejected"} for s in states.values()):
-                return finish("needs_attention", "尚有目标需要人工核对，已保留进度")
+                return finish("needs_attention", attention_message(states))
             if not config.monitor_until_complete and time.monotonic() >= deadline:
                 return finish("pending", "本轮监测到时，尚有未完成目标")
             publish("等待空位，继续检查未完成目标")

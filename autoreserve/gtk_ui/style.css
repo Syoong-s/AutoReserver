@@ -93,3 +93,4 @@ paned > separator.wide:active { background: #7da2dd; }
 .workbench-section > title { padding: 6px 4px; color: #354155; }
 .workbench-section > title > label { font-weight: 600; }
 .workbench-section.rush-enabled > title { color: #a06112; background: #fff5e6; border-radius: 7px; }
+.history-row { background: #f6f7f9; border: 1px solid #e5e9f0; border-radius: 9px; padding: 12px; }
