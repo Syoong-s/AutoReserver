@@ -15,8 +15,6 @@ A native Linux and Windows 11 reservation workspace for Shanghai Jiao Tong Unive
 
 AutoReserve combines a GTK 3 desktop with a local Playwright booking worker. Create one-time goals, rank alternatives across venues and courts, or schedule separate weekly repeat goals. The application submits an available order and records its result; it does not make payments.
 
-The desktop architecture follows TeleMail's Linux approach: typed GTK C-ABI bindings, GtkBuilder layouts, CSS, a toolkit-independent editor model, and background tasks communicating through a queue. This repository is self-contained and does not require the original project directory or TeleMail.
-
 [中文说明](README-CN.md)
 
 ## Features
@@ -37,7 +35,7 @@ The desktop architecture follows TeleMail's Linux approach: typed GTK C-ABI bind
 
 **Windows 11 x86_64:** download the `windows-x86_64-portable.zip`, extract the entire folder to a writable local Windows drive and double-click **`AutoReserve.exe`**. The package includes private Python and GTK runtimes; first launch downloads Chromium into the same folder. System Python and WSL are unnecessary. See [native Windows setup and validation](docs/WINDOWS.md).
 
-CI currently publishes x86_64 archives; aarch64 archives can be built natively with the same release tool. Use the architecture-matching Linux portable archive, extract it to a writable folder, and double-click **`AutoReserve`** inside that folder. This is a native ELF launcher, like TeleMail's Linux entry point; shell-script execution settings are not required. Keep the launcher with the rest of the extracted files. Ubuntu 22.04+ with a graphical desktop/WSLg session and its normal `/usr/bin/python3` is the supported automatic-setup target.
+CI currently publishes x86_64 archives; aarch64 archives can be built natively with the same release tool. Use the architecture-matching Linux portable archive, extract it to a writable folder, and double-click **`AutoReserve`** inside that folder.
 
 The first launch checks the actual runtime and shows setup progress when work is needed:
 

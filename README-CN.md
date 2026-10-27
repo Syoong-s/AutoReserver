@@ -11,8 +11,6 @@
 
 请保留启动文件与解压后的其他文件，首次启动需联网下载缺少的依赖；配置保存在程序文件夹内的 `config/` 中。
 
-v0.12.0 支持 **Linux 与 Windows 11 原生运行**，使用参考 TeleMail 的 **GTK 3 原生控件 + GtkBuilder 布局 + CSS + 后台任务队列** 架构，提供按目标独立设置的抢购模式。窗口、标题栏、拖动缩放、滚动条与滚轮传播由 GTK 管理；预约编辑状态独立于 GUI 工具包。工作台不使用 Tk 或网页渲染，预约仍通过独立 Playwright 浏览器执行。
-
 Windows 用户下载 `windows-x86_64-portable.zip`，完整解压到 Windows 本地可写文件夹，双击其中的 **AutoReserve.exe**。无需安装 Python 或 WSL；包内附带私有 Python 和 GTK，首次启动将 Chromium 安装到程序文件夹。不要在压缩包内或 WSL 网络共享路径启动。配置仍位于该文件夹的 `config/`，具体步骤见 [Windows 说明](docs/WINDOWS.md)。
 
 ## 启动与登录
@@ -140,10 +138,6 @@ GTK 默认使用当前桌面的 Wayland 或 X11 后端。启动器会预检 GTK 
 - `autoreserve/desktop.py`：保留 CLI 启动兼容入口，转交 GTK；其中旧 Tk 类及配套模块仅用于历史回归。
 - `.auth/`：私有登录、目录、场地名、迁移备份和订单记录，不要分享。
 - `artifacts/gtk-rebuild/`：本次代码备份、截图、日志与差异。
-
-参考 TeleMail 的 `maildesk/desktop.py`、`gtk_native.py`、`desktop_assets/main.ui` 和窗口管理方式。代码不依赖 TeleMail 的路径、邮件服务或配置，未修改 TeleMail 项目。
-
-本机验证使用 **Python 3.14.4、GTK 3.24.52、Playwright 1.64.1**，v0.9 验证时没有安装软件或修改全局环境；v0.10 的首次初始化会按需在程序文件夹内安装依赖。GTK / GDK / GLib / GObject / Gio / Cairo 使用已有系统动态库。GTK 主工作台无需 Tk、PyGObject 或 WebKitGTK；旧 Tk 回归仍使用原有隔离 Tk 8.6.17 资源。
 
 通用 Linux / WSLg 环境需要 Python 3.12+、GTK 3.24+ 及其标准运行库、图形桌面会话与 `requirements.txt` 中的浏览器依赖。使用 Python 标准库 ctypes 调用原生 API，无需编译步骤。便携启动：`./start-gui.sh`；命令行配置检查：`./run.sh check`。
 
