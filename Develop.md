@@ -220,7 +220,49 @@ python tools/build_windows.py
 - 目录缓存一旦生成永久复用，后续选择场馆均读取本地缓存，不给服务器增加查询压力；
 - 实际监控过的项目会自动缓存具体场地名称，供用户在界面中精准指定。
 
+### 7.5 长时间监测的超时诊断与受限自恢复（2026-10-27）
+
+用户报告的是“预约网格加载超时／读取空位失败”，且停止后重新开始通常恢复。这与旧页面、未完成请求或浏览器会话状态卡住相符，但不能据此认定网站已识别自动化。未取得真实故障时的服务器响应与网站内部风控规则，以下区分源码可确认的问题与尚未证实的原因。
+
+| 发现 | 源码及资料支持的结论 | 改进 |
+| --- | --- | --- |
+| 网格和点击共用原来的 10 秒等待 | 慢请求或加载遮罩未消失会被统一当作网格超时 | 独立 `grid_timeout_seconds=30.0`，范围 0.1–120 秒；设置中可调整，不改变点击超时 |
+| 页面导航只清除快照缓存 | 上一文档未完成的请求可能继续影响新文档的就绪判断 | 主框架导航同时清空旧请求集合、错误状态并推进版本号 |
+| 日期读取失败后强制整页导航 | 会重复下载资源，并可能重新建立相同的卡住状态 | 已有预约页面时优先恢复日期读取；旧数据请求未结束时先等待，不叠加新的日期点击 |
+| 任意一次局部读取成功就清除失败计数 | “页面加载成功、目标网格失败”能持续循环，退避恢复过早 | 仅完整监测轮次恢复失败状态，保留跨局部成功的失败计数 |
+| 同一操作触发多个原生接口 | 多个 429/503 响应可能对一次操作重复加倍退避 | 每个读取预算只累计一次服务器失败，保留最长 Retry-After |
+| 只等待退避不能修复浏览器状态 | 和手动停止／重开后的恢复现象一致，仍需真实故障日志确认具体原因 | 连续两次网格／操作超时触发一次浏览器重建，第二个浏览器仍失败则明确停止，不无限循环重启 |
+
+实现位于 `monitoring.py`、`sjtu.py`、`runner.py`、`multivenue.py` 和 `desktop_controller.py`。单次监测最多重建一次浏览器；先关闭旧实例，再打开新实例。重建前按手动停止时的方式保存当前已登录会话，沿用同一份订单 SQLite。已提交、结果未知等状态仍由原订单锁保护，不重放提交操作；停止按钮会取消尚未开始的重建。普通固定时长任务保留原截止时刻，恢复不会重新赠予完整监测时长。
+
+HTTP 401 或页面离开场馆站点会明确要求重新登录；403 停止监测。429 及 500/502/503/504 使用共享服务器退避，尊重 Retry-After，不以这些状态触发浏览器轮换。网络／网格失败后普通读取临时降低到原间隔的 2、4、8 倍，恢复间隔上限至少保留用户原间隔、通常不超过 600 秒；三个完整健康轮次才降低一级。恢复观察期间关闭抢购加速，避免故障刚结束就产生高频读取。原有全局最小间隔和非负随机抖动继续生效。
+
+超时信息区分“网格未出现、仍有 N 个请求未完成、加载遮罩未消失、日历未返回、目标日期／项目未就绪”。重建证据写入当前运行目录的 `read-recovery-1/`、`read-recovery-2/`，包含 `result.json` 和尽力保存的页面截图。正常情况下不额外探测接口，不调用隐藏预约接口，不改变浏览器自动化标识。接口限流、服务器繁忙、会话失效和客户端卡住是不同问题，这些恢复改进不保证网站不会识别或限制自动化。
+
+#### 网络调研依据
+
+- [Playwright Page.route](https://playwright.dev/python/docs/api/class-page#page-route)：路由会禁用 HTTP 缓存。当前程序为阻断付款必须保留路由，因此减少整页重载尤其有价值；本次未解除付款阻断或强制绕过缓存约束。
+- [RFC 6585 §4：429 Too Many Requests](https://www.rfc-editor.org/rfc/rfc6585.txt)：429 表示请求速率受限，可以带 Retry-After；它与仅有 DOM 网格超时不是同一证据。
+- [Amazon Builders’ Library：Timeouts, retries, and backoff with jitter](https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/)：重试可能放大故障负载，应限制重试层次和次数，使用退避与抖动；超时不能证明有副作用的请求没有执行。
+- [Playwright Authentication](https://playwright.dev/python/docs/auth)：已保存登录状态可以复用，但会过期；因此明确识别登录失效，不把它持续当作网格慢响应重试。
+
+#### 验证与运行环境
+
+使用已有 Python 3.14.4、Playwright 1.64.1 和本机 Chromium（Playwright revision 1248）；没有新增依赖，也未生成 Windows 包。源码语法检查使用 `python -m compileall -q autoreserve scripts tests`。单元检查使用 `python -m unittest discover -s tests -p test_read_recovery.py -v` 和 `python -m unittest discover -s tests -p test_monitoring.py -v`。浏览器测试先通过 `scripts.bootstrap.environment()` 加载现有私有运行库，再设置 `RUN_BROWSER_TESTS=1` 运行 `test_browser`、`test_multivenue`、`test_rush_browser`；界面测试另设置 `RUN_GTK_TESTS=1` 运行 `test_gtk`。
+
+测试仅使用本机回环站点与临时配置。恢复场景将旧浏览器的网格读取固定为失败，再让新浏览器执行真实本地预约流程，检查只重建一次且只提交一单；单元测试同时验证已确认订单跨浏览器保留、持续故障不第三次重启、HTTP 拒绝不轮换浏览器、停止取消恢复、普通任务的截止时刻不被重置。开发说明集中在本文件，README 文件不作修改。
+
 ---
+
+### 7.6 场地时段浮窗的滚动定位竞态（2026-10-27）
+
+发布工作流的 `test_slot_scroller_retains_scroll_position_on_selection` 曾出现 `84.25 != 80`。根因是浮窗打开后 25 毫秒执行的初始定位，与用户滚动／修改选择并发：回调按已选时段重新计算行偏移，覆盖用户刚设置的 GtkAdjustment。此前工作区初始化还会在浮窗未显示时安排另一轮定位，增加分配时序的不确定性。
+
+源码修复集中在 `gtk_desktop.py`：移除隐藏浮窗的初始化定位；每次打开只保留一个由窗口拥有的定位计时器。修改场地／时段选择、关闭浮窗或销毁窗口时取消计时器；回调执行时检查浮窗是否可见，以及滚动位置是否已从打开时发生变化。已经手动滚动时保留当前位置，不再执行初始定位。不修改滚动条的正常 GTK 行为，也不放宽测试的 1 像素误差。
+
+回归测试先完成一次原生布局，再重新打开浮窗并立即交互，稳定构造“交互发生在延迟定位之前”的顺序；分别覆盖滚动、选择和关闭。用 Git HEAD 中的旧实现加载相同测试，可重现原始 `84.25 != 80` 断言，以及选择早间时段后误跳到顶部的问题。测试环境继续使用已有 Python 3.14.4 与 GTK 3，无新增依赖；使用 `RUN_GTK_TESTS=1` 和 `scripts.bootstrap.environment()` 运行 `test_gtk`，CI 对应的 X11 后端设置为 `GDK_BACKEND=x11`。语法检查使用 `python -m compileall -q autoreserve scripts tools tests demo`。未生成 Windows 包，README 文件保持不变。
+
+验证结果：X11 下完整 GTK 套件 26 项通过；两个滚动测试各重复 10 次，以及布局恢复重复 3 次，合计 23 项通过。Python 3.14 的全套 discover 执行了 262 项，其中 236 项通过、26 项因当前解释器缺少 tkinter 无法导入／启动；因此不将该次运行记为全套通过。随后使用已有 Python 3.12.13（tkinter 8.6）运行 `test_chrome`、`test_gui_startup`、`test_native`，34 项全部通过，覆盖上述遗漏场景。两个环境合计覆盖 265 个独立用例，不代表同一解释器下单次完整运行结果。日志分别位于 `.runtime/gtk-slot-scroll-full-tests.log`、`.runtime/gtk-slot-scroll-legacy-tests.log` 和 `.runtime/gtk-slot-scroll-repeat.log`。
 
 ## 8. 老版本数据与配置迁移
 

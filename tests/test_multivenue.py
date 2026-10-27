@@ -1,6 +1,7 @@
 """Cross-venue priorities and shared pacing in real Chromium against local fixtures."""
 
 from dataclasses import replace
+from contextlib import contextmanager
 from datetime import timedelta
 import os
 import unittest
@@ -8,7 +9,10 @@ from urllib.parse import urlencode
 from unittest.mock import patch
 
 from autoreserve.catalog import ANY_COURT
-from autoreserve.config import BookingContext, Goal
+from autoreserve.config import BookingContext, Goal, save_config
+from autoreserve.browser import open_browser
+from autoreserve.desktop_controller import DesktopController
+from test_catalog import native_config
 from autoreserve.runner import run_reservation
 from autoreserve.sjtu import GridNotReady, SjtuPage
 import test_browser as fixtures
@@ -120,6 +124,51 @@ class MultiVenueTests(unittest.TestCase):
             self.assertEqual(result['status'],'stopped')
             self.assertGreaterEqual(result['monitor']['reads'],2)
             self.assertEqual(page.evaluate('submitClicks'),0)
+
+    # ==========================================
+    # Function: Recover the user's stop/restart symptom by replacing one real stale browser session.
+    # Method: Stall the first page's grid reads, then require one local order from a fresh browser and no duplicate submit.
+    # ==========================================
+    def test_stalled_monitor_reopens_browser_once(self):
+        path=self.root/'desktop-config.json'
+        save_config(native_config(),path)
+        controller=DesktopController(path,self.root/'recovery-auth')
+        goal=Goal('recover-browser','恢复监测',[self.target_at('A馆')])
+        config=replace(self.config,goals=[goal],targets=[],monitor_until_complete=True,max_poll_seconds=0)
+        pages,submits=[],[]
+        original=SjtuPage.loaded_snapshot
+
+        # ==========================================
+        # Function: Track each actual browser page and its order requests across replacement.
+        # Method: Delegate unchanged to the production browser manager using only loopback fixtures.
+        # ==========================================
+        @contextmanager
+        def browser(*args,**kwargs):
+            with open_browser(*args,**kwargs) as (context,page):
+                pages.append(page)
+                page.on('request',lambda request:submits.append(request.url) if request.url.endswith('/ConfirmOrder') else None)
+                yield context,page
+
+        # ==========================================
+        # Function: Reproduce a JavaScript/renderer state that only disappears when the browser is replaced.
+        # Method: Fail only the first page, leaving the replacement's real DOM and native request handling unchanged.
+        # ==========================================
+        def snapshot(site,*args,**kwargs):
+            if pages and site.page is pages[0]:
+                raise GridNotReady('模拟旧页面加载遮罩卡住')
+            return original(site,*args,**kwargs)
+
+        with patch('autoreserve.desktop_controller.open_browser',browser), \
+                patch('autoreserve.desktop_controller.HOME_URL',self.base), \
+                patch('autoreserve.desktop_controller.DirectoryClient.authenticated',return_value=True), \
+                patch('autoreserve.runner.ReadPacer',fixtures.FastPacer), \
+                patch.object(SjtuPage,'loaded_snapshot',snapshot):
+            controller.monitor_with_recovery(config,self.root/'recovery-artifacts')
+        self.assertEqual(controller.result['status'],'completed')
+        self.assertEqual(len(pages),2)
+        self.assertTrue(all(page.is_closed() for page in pages))
+        self.assertEqual(len(submits),1)
+        self.assertTrue((self.root/'recovery-auth/session.json').exists())
 
     # ==========================================
     # Function: Pause all venues when an availability request is rate limited.

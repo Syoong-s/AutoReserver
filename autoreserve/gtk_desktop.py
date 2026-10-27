@@ -55,6 +55,8 @@ class GtkDesktop:
         self.font_spin = None
         self.layout_save_timer = None
         self.layout_restore_timer = None
+        self.hour_reveal_timer = None
+        self.hour_reveal_position = None
         self._layout_ready = self._restoring_layout = False
         self._layout_phase = 0
         self._sidebar_order, self._court_scope, self._busy = None, None, None
@@ -94,7 +96,6 @@ class GtkDesktop:
         self.refresh_visibility()
         self.timer = g.later(33,self.tick,repeat=True)
         self.start_layout_restore()
-        g.later(40,self.reveal_selected_hours)
         if auto_catalog and controller.catalog is None and (controller.auth_dir/'session.json').exists():
             g.later(250,lambda:self.action('catalog'))
 
@@ -306,6 +307,7 @@ class GtkDesktop:
         self.court_flow,self.hour_flow=self.flow(1,2),self.flow(2,2)
         self.court_scroll=self.pack(courts,self.scroller(self.court_flow,180))
         self.hour_scroll=self.pack(slots,self.scroller(self.hour_flow,180))
+        g.connect(self.builder_popover,'closed',lambda *_:self.cancel_hour_reveal())
         self.build_choices(self.hour_flow,HOURS,self.hour_buttons,{'14:00-15:00'},False)
         self.selection_hint=self.pack(self.builder_shell,self.label('', 'caption',wrap=True))
         addbar=self.pack(self.builder_shell,self.box())
@@ -321,12 +323,13 @@ class GtkDesktop:
 
     # ==========================================
     # Function: Open a compact anchored candidate composer without discarding unfinished selections.
-    # Method: Keep its native controls alive between dismissals and constrain scrolling to the visible window height.
+    # Method: Keep native controls alive, constrain the visible height and own one cancellable initial scroll.
     # ==========================================
     def open_builder(self):
         self.editing()
         self.model.editable()
         g=self.g
+        self.cancel_hour_reveal()
         height=max(200,min(420,g.gtk_widget_get_allocated_height(self.window)-300))
         g.gtk_widget_set_size_request(self.builder_scroll,-1,min(280,height))
         g.gtk_scrolled_window_set_min_content_height(self.builder_scroll,0)
@@ -334,7 +337,8 @@ class GtkDesktop:
         g.gtk_scrolled_window_set_min_content_height(self.builder_scroll,min(240,height))
         g.gtk_widget_show_all(self.builder_popover)
         g.gtk_popover_popup(self.builder_popover)
-        g.later(25,self.reveal_selected_hours)
+        self.hour_reveal_position=g.gtk_adjustment_get_value(g.gtk_scrolled_window_get_vadjustment(self.hour_scroll))
+        self.hour_reveal_timer=g.later(25,self.reveal_selected_hours)
 
     # ==========================================
     # Function: Restore application typography and pane positions independently of booking settings.
@@ -760,11 +764,12 @@ class GtkDesktop:
 
     # ==========================================
     # Function: Keep wildcard and exact courts mutually exclusive.
-    # Method: Adjust other native toggles under a load guard and update the selection caption.
+    # Method: Cancel deferred positioning after interaction, adjust toggles under a load guard and update the caption.
     # ==========================================
     def choice_changed(self, value, courts):
         if self.loading:
             return
+        self.cancel_hour_reveal()
         if courts and self.g.gtk_toggle_button_get_active(self.court_buttons[value]):
             self.loading=True
             for name,button in self.court_buttons.items():
@@ -798,15 +803,27 @@ class GtkDesktop:
         self.set_busy()
 
     # ==========================================
+    # Function: Let selection and dismissal cancel deferred initial positioning.
+    # Method: Remove the owned GLib source before another event-loop iteration can change the adjustment.
+    # ==========================================
+    def cancel_hour_reveal(self):
+        if self.hour_reveal_timer:
+            self.g.cancel(self.hour_reveal_timer)
+            self.hour_reveal_timer=None
+
+    # ==========================================
     # Function: Reveal the initially selected time without scrolling the whole workbench.
-    # Method: Position the native slot adjustment after GTK has allocated its wrapping rows.
+    # Method: Release timer ownership and skip closed composers or adjustments already moved since opening.
     # ==========================================
     def reveal_selected_hours(self):
-        if self.destroyed:
+        self.hour_reveal_timer=None
+        if self.destroyed or not self.g.gtk_widget_get_mapped(self.builder_popover):
             return
         selected=self.selected_values(self.hour_buttons)
         if selected:
             adjustment=self.g.gtk_scrolled_window_get_vadjustment(self.hour_scroll)
+            if self.g.gtk_adjustment_get_value(adjustment)!=self.hour_reveal_position:
+                return
             rows=(len(self.hour_buttons)+1)//2
             row=list(self.hour_buttons).index(selected[0])//2
             height=self.g.gtk_adjustment_get_upper(adjustment)/max(1,rows)
@@ -1307,6 +1324,7 @@ class GtkDesktop:
         self.pack(content,self.label('执行设置','section-title'))
         self.pack(content,self.label('运行中可调整界面；修改预约参数前请先停止监测。','muted',wrap=True))
         specs=[('普通目标启动时间 · 北京时间，留空立即','start_at'),('全局读取间隔 / 秒','poll_interval_seconds'),
+               ('预约网格加载等待 / 秒','grid_timeout_seconds'),
                ('额外随机延迟 / %','poll_jitter_ratio'),('异常退避上限 / 秒','backoff_max_seconds'),
                ('单个订单金额上限 / 元 · 0 为无上限','max_total_price'),('普通模式监测时长 / 秒 · 0 为无上限','max_poll_seconds')]
         for caption,key in specs:
@@ -1597,10 +1615,11 @@ class GtkDesktop:
 
     # ==========================================
     # Function: Retire UI timers and exit the registered application safely.
-    # Method: Mark destruction before a pending GLib tick can touch borrowed widget pointers.
+    # Method: Mark destruction and cancel deferred positioning before GLib can touch borrowed widget pointers.
     # ==========================================
     def on_destroy(self):
         self.destroyed=True
+        self.cancel_hour_reveal()
         if self.layout_restore_timer:
             self.g.cancel(self.layout_restore_timer)
             self.layout_restore_timer=None

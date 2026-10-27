@@ -237,19 +237,48 @@ class GtkWorkspaceTests(unittest.TestCase):
 
     # ==========================================
     # Function: Keep native scrolling independent from selection repaint events.
-    # Method: Compare the same GtkAdjustment before and after court/time toggles.
+    # Method: Reopen an allocated composer and interact before its initial scroll timeout can fire.
     # ==========================================
     def test_slot_scroller_retains_scroll_position_on_selection(self):
         app,g=self.app,self.g
         app.open_builder()
         self.wait_layout(lambda:g.gtk_adjustment_get_upper(g.gtk_scrolled_window_get_vadjustment(app.hour_scroll))>180)
+        self.pump(.1)
         adjustment=g.gtk_scrolled_window_get_vadjustment(app.hour_scroll)
         self.assertGreater(g.gtk_adjustment_get_upper(adjustment),g.gtk_adjustment_get_page_size(adjustment))
+        g.gtk_popover_popdown(app.builder_popover)
+        self.pump(.1)
+        app.open_builder()
         g.gtk_adjustment_set_value(adjustment,80)
         g.gtk_toggle_button_set_active(app.hour_buttons['16:00-17:00'],True)
-        self.pump()
+        self.pump(.1)
         self.assertAlmostEqual(g.gtk_adjustment_get_value(adjustment),80,delta=1)
         self.assertTrue(g.gtk_widget_get_mapped(app.hour_scroll))
+
+    # ==========================================
+    # Function: Keep deferred initial positioning from overriding scroll-only and selection-only interaction.
+    # Method: Reuse an allocated composer so each interaction precedes the pending native timeout without waiting.
+    # ==========================================
+    def test_slot_initial_reveal_yields_to_user_interaction(self):
+        app,g=self.app,self.g
+        app.open_builder()
+        self.wait_layout(lambda:g.gtk_adjustment_get_upper(g.gtk_scrolled_window_get_vadjustment(app.hour_scroll))>180)
+        self.pump(.1)
+        adjustment=g.gtk_scrolled_window_get_vadjustment(app.hour_scroll)
+        for interaction in ('scroll','selection','dismiss'):
+            with self.subTest(interaction=interaction):
+                g.gtk_popover_popdown(app.builder_popover)
+                self.pump(.1)
+                app.open_builder()
+                if interaction=='scroll':
+                    g.gtk_adjustment_set_value(adjustment,80)
+                elif interaction=='selection':
+                    g.gtk_toggle_button_set_active(app.hour_buttons['07:00-08:00'],True)
+                else:
+                    g.gtk_popover_popdown(app.builder_popover)
+                position=g.gtk_adjustment_get_value(adjustment)
+                self.pump(.1)
+                self.assertAlmostEqual(g.gtk_adjustment_get_value(adjustment),position,delta=1)
 
     # ==========================================
     # Function: Preserve per-goal unfinished venue drafts through navigation.

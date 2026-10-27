@@ -225,6 +225,7 @@ class Config:
     calendar_refresh_seconds: float = 300.0
     max_poll_seconds: float = 0.0
     action_timeout_ms: int = 10000
+    grid_timeout_seconds: float = 30.0
     result_timeout_seconds: float = 30.0
     verification_timeout_seconds: float = 180.0
     max_total_price: str = "0.00"
@@ -279,6 +280,7 @@ class Config:
             ("backoff_max_seconds", 30, 3600), ("calendar_refresh_seconds", 60, 3600),
             ("max_poll_seconds", 0, 86400),
             ("action_timeout_ms", 100, 120000), ("result_timeout_seconds", 1, 600),
+            ("grid_timeout_seconds", 0.1, 120),
             ("verification_timeout_seconds", 1, 1800),
         ):
             value = getattr(self, name)

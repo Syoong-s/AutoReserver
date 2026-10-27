@@ -8,6 +8,7 @@ import time
 from urllib.parse import urlsplit
 
 from .config import parse_start
+from .catalog import LoginRequired
 from .monitoring import AccessDenied, ReadDeferred, ReadPacer
 from .sjtu import GridNotReady, SjtuPage, candidate_cells, expand_candidates
 from .state import private_json
@@ -230,7 +231,7 @@ def run_plan(page, config, journal, artifacts, submit=False, progress=None, stop
     # ==========================================
     def pacing_progress(info):
         if info["wait_seconds"] > 0:
-            message = info["reason"] if info["cooling_down"] else "全部目标持续监测中，等待下一次全局读取"
+            message = info["reason"] or "全部目标持续监测中，等待下一次全局读取"
             publish(message)
 
     # ==========================================
@@ -246,6 +247,8 @@ def run_plan(page, config, journal, artifacts, submit=False, progress=None, stop
             reason = str(exc)
         else:
             reason = str(exc) if isinstance(exc, ReadDeferred) else f"读取空位失败（{type(exc).__name__}）"
+            if isinstance(exc,GridNotReady) or type(exc).__name__=='TimeoutError':
+                pacer.grid_failed(reason)
             pacer.defer(reason)
             reason = pacer.reason
         publish(reason)
@@ -260,9 +263,9 @@ def run_plan(page, config, journal, artifacts, submit=False, progress=None, stop
         try:
             value = operation()
             pacer.check_response()
-            pacer.healthy()
+            pacer.healthy(complete_cycle=False)
             return value
-        except AccessDenied:
+        except (AccessDenied,LoginRequired):
             raise
         except InterruptedError:
             raise
@@ -321,6 +324,8 @@ def run_plan(page, config, journal, artifacts, submit=False, progress=None, stop
             wait_for_start(config, stop)
             deadline = config.monitor_deadline(time.monotonic())
         seed = read(load_booking)
+        if seed is None and not config.monitor_until_complete and time.monotonic()>=deadline:
+            return finish('pending','读取未完成且监测时长已到，已保留进度')
         needs_load = seed is None
         last_calendar = time.monotonic()
         while not stop():
@@ -344,6 +349,7 @@ def run_plan(page, config, journal, artifacts, submit=False, progress=None, stop
                     return finish("completed", "全部预约目标已提交成功；未执行付款")
                 return finish("needs_attention", "仍有目标需要人工核对，已保留全部进度")
             if needs_load or time.monotonic() - last_calendar >= config.calendar_refresh_seconds:
+                last_calendar=time.monotonic()
                 seed = read(load_booking)
                 if seed is None:
                     needs_load = True
@@ -365,7 +371,7 @@ def run_plan(page, config, journal, artifacts, submit=False, progress=None, stop
                 else:
                     shot = read(lambda value=value: read_date(value))
                 if shot is None:
-                    needs_load = True
+                    needs_load = not bool(page.locator('#apointmentDetails').count())
                     for goal in pending:
                         if goal.candidates[0].date == value:
                             states[goal.id]["watch_state"] = "backoff"
@@ -381,6 +387,8 @@ def run_plan(page, config, journal, artifacts, submit=False, progress=None, stop
                 publish(f"日期 {value} 已更新，相关目标共享此次空位读取",
                         None if shot.get("date_not_open") else shot)
             ready = []
+            if len(snapshots)==len(dates):
+                pacer.healthy()
             for goal in pending:
                 shot = snapshots.get(goal.candidates[0].date)
                 if not shot or shot.get("date_not_open"):
@@ -407,7 +415,7 @@ def run_plan(page, config, journal, artifacts, submit=False, progress=None, stop
                     if current["active_date"] != target.date or selected_dirty:
                         current = read(lambda value=target.date: read_date(value))
                     if current is None:
-                        needs_load = True
+                        needs_load = not bool(page.locator('#apointmentDetails').count())
                         break
                     if current.get("date_not_open"):
                         continue
@@ -428,7 +436,7 @@ def run_plan(page, config, journal, artifacts, submit=False, progress=None, stop
                 except GridNotReady as exc:
                     defer_read(exc)
                     state["watch_state"] = "backoff"
-                    needs_load, seed = True, None
+                    needs_load, seed = not bool(page.locator('#apointmentDetails').count()), None
                     break
                 if stop():
                     return finish("stopped", "已停止，没有提交当前目标")

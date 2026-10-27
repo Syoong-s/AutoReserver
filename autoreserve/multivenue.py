@@ -6,6 +6,7 @@ import time
 from zoneinfo import ZoneInfo
 
 from .monitoring import AccessDenied, ReadDeferred
+from .catalog import LoginRequired
 from .repeat import materialize_daily, next_daily
 from .runner import evidence, submit_once, wait_for_start
 from .sjtu import GridNotReady, SjtuPage, candidate_cells, expand_candidates
@@ -106,6 +107,8 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
         elif isinstance(exc, ReadDeferred) and not isinstance(exc, GridNotReady):
             reason = str(exc)
         else:
+            if isinstance(exc,GridNotReady) or type(exc).__name__=='TimeoutError':
+                pacer.grid_failed(str(exc) if isinstance(exc,GridNotReady) else f'读取空位失败（{type(exc).__name__}）')
             pacer.defer(str(exc) if isinstance(exc, GridNotReady) else f"读取空位失败（{type(exc).__name__}）")
             reason = pacer.reason
         publish(reason)
@@ -123,9 +126,9 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
         try:
             shot = operation()
             pacer.check_response()
-            pacer.healthy()
+            pacer.healthy(complete_cycle=False)
             return shot
-        except (AccessDenied, InterruptedError):
+        except (AccessDenied,LoginRequired,InterruptedError):
             raise
         except Exception as exc:
             defer(exc)
@@ -160,6 +163,7 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
         effective = replace(config, booking_url=context[0], venue=context[1], sport=context[2], goals=[])
         site = SjtuPage(page, effective, stop)
         current_context = context
+        last_calendar=time.monotonic()
         page.goto(effective.booking_url, wait_until="domcontentloaded")
         site.ready()
         shot = site.choose_sport()
@@ -305,7 +309,7 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
                     else:
                         shot = read(lambda day=day: date_read(day))
                     if shot is None:
-                        needs_load, read_failed = True, True
+                        needs_load, read_failed = not bool(page.locator('#apointmentDetails').count()), True
                         break
                     snapshots[(context, day)] = shot
                     checked = datetime.now(ZoneInfo(config.timezone)).isoformat()
@@ -320,6 +324,7 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
                         rush_fast = True
                         break
                 if not read_failed:
+                    pacer.healthy()
                     ready = [(g, best(g, snapshots)) for g in pending if not rush_fast or g.rush.enabled]
                     ready = [(g, t) for g, t in ready if t is not None]
                     publish(f"本轮已检查 {len(snapshots)} 个日期/场馆组合，发现 {len(ready)} 个可预约目标")
@@ -359,7 +364,7 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
                             except GridNotReady as exc:
                                 defer(exc)
                                 states[goal.id]["watch_state"] = "backoff"
-                                needs_load, read_failed = True, True
+                                needs_load, read_failed = not bool(page.locator('#apointmentDetails').count()), True
                                 break
                             if stop():
                                 raise InterruptedError("用户停止监测")

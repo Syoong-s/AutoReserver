@@ -29,6 +29,14 @@ class ReadDeferred(RuntimeError):
 
 
 # ==========================================
+# Function: Request a bounded browser-session recovery after consecutive read-only grid failures.
+# Method: Keep stuck-page recovery distinct from server throttles, access denial and order submission outcomes.
+# ==========================================
+class GridReadStalled(RuntimeError):
+    pass
+
+
+# ==========================================
 # Function: Interpret Retry-After without ignoring a long server cooldown.
 # Method: Accept delta seconds and HTTP dates; reject invalid or past values.
 # ==========================================
@@ -76,6 +84,9 @@ class ReadPacer:
         self._rush_counts = {}
         self._recent_reads = deque()
         self.last_read = None
+        self.grid_failures = 0
+        self.adaptive_level = self.healthy_cycles = 0
+        self._server_feedback_read = None
 
     # ==========================================
     # Function: Share upcoming timed-release windows across every goal and venue.
@@ -92,8 +103,10 @@ class ReadPacer:
         now = self.clock()
         active = [(key, start, rush) for key, start, rush in self.rush_windows
                   if start <= now < start + 1 + rush.followup_seconds]
-        if not active:
-            phase, interval, wait_until = None, self.config.poll_interval_seconds, now
+        if not active or self.adaptive_level:
+            interval=min(self.config.poll_interval_seconds * 2**self.adaptive_level,
+                         max(self.config.poll_interval_seconds,600))
+            phase, wait_until = None, now
         else:
             key, start, rush = min(active, key=lambda item: item[1])
             initial = now < start + 1
@@ -127,6 +140,7 @@ class ReadPacer:
                 "next_read_at": self.wall() + remaining, "wait_seconds": round(remaining, 1),
                 "cooling_down": self.cooldown_until > self.clock(),
                 "reason": self.reason, "reads": self.reads, "access_denied": self.blocked,
+                "adaptive_level": self.adaptive_level, "grid_failures": self.grid_failures,
                 "rush_phase": self._rush_phase[-1] if self._rush_phase else None}
 
     # ==========================================
@@ -175,21 +189,40 @@ class ReadPacer:
         if response.status == 403:
             self.blocked = True
             self.reason = "网站返回 HTTP 403，已暂停监测，请稍后人工检查"
-        elif response.status in {429, 503}:
-            self.defer(f"网站返回 HTTP {response.status}", response.headers.get("retry-after"))
+        elif response.status in {429, 500, 502, 503, 504}:
+            retry_after=response.headers.get('retry-after')
+            if self._server_feedback_read == self.reads:
+                self.cooldown_until=max(self.cooldown_until,self.clock()+retry_after_seconds(retry_after,self.wall()))
+                self.reason=f'网站返回 HTTP {response.status}；全局退避 {max(0,self.cooldown_until-self.clock()):.0f} 秒'
+            else:
+                self._server_feedback_read=self.reads
+                self.defer(f"网站返回 HTTP {response.status}",retry_after,server=True)
             self.server_error = self.reason
 
     # ==========================================
     # Function: Increase delay after network errors or a server throttle response.
     # Method: Exponentially back off, always respecting any longer Retry-After.
     # ==========================================
-    def defer(self, reason, retry_after=None):
+    def defer(self, reason, retry_after=None, server=False):
         self.failures += 1
+        self.healthy_cycles=0
+        self.adaptive_level=min(3,self.adaptive_level+1)
+        if server:
+            self.grid_failures=0
         automatic = min(self.config.backoff_max_seconds,
                         max(30.0, self.config.poll_interval_seconds) * 2 ** min(self.failures - 1, 12))
         delay = max(automatic, retry_after_seconds(retry_after, self.wall()))
         self.cooldown_until = max(self.cooldown_until, self.clock() + delay)
         self.reason = f"{reason}；全局退避 {delay:.0f} 秒"
+
+    # ==========================================
+    # Function: Detect a stuck read cycle without treating HTTP throttling as a reason to rotate browsers.
+    # Method: Count only unconfirmed grid/action timeouts and request recovery before installing another long delay.
+    # ==========================================
+    def grid_failed(self, reason):
+        self.grid_failures+=1
+        if self.grid_failures>=2:
+            raise GridReadStalled(f'连续 {self.grid_failures} 次预约网格读取超时：{reason}')
 
     # ==========================================
     # Function: Stop before another read if an access denial was observed.
@@ -211,9 +244,16 @@ class ReadPacer:
 
     # ==========================================
     # Function: Restore normal cadence after a confirmed healthy read.
-    # Method: Reset the error streak without shortening an unexpired cooldown.
+    # Method: Require a complete healthy cycle before clearing failures and three cycles before reducing adaptive slowdown.
     # ==========================================
-    def healthy(self):
+    def healthy(self, complete_cycle=True):
+        if not complete_cycle or self.server_error:
+            return
         self.failures = 0
+        self.grid_failures=0
+        self.healthy_cycles+=1
+        if self.healthy_cycles>=3:
+            self.adaptive_level=max(0,self.adaptive_level-1)
+            self.healthy_cycles=0
         if self.clock() >= self.cooldown_until:
-            self.reason = ""
+            self.reason = (f'错误恢复观察中，全局读取间隔暂为 {self.cadence()[0]:g} 秒' if self.adaptive_level else '')

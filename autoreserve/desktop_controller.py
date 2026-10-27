@@ -11,7 +11,8 @@ import time
 
 from .browser import open_browser, origin_of, save_session
 from .catalog import DirectoryCache, DirectoryClient, LoginRequired, block_availability, booking_url
-from .config import BookingContext, HOME_URL, Target, load_config, save_config
+from .config import BookingContext, HOME_URL, Target, load_config, save_config, parse_start
+from .monitoring import GridReadStalled
 from .gui import Controller
 from .runner import evidence, run_reservation
 from .state import Journal, account_lock, private_json
@@ -277,6 +278,60 @@ class DesktopController(Controller):
         self.emit("workspace", asdict(config))
 
     # ==========================================
+    # Function: Recover one stuck browser without replaying submitted or uncertain orders.
+    # Method: Reopen only after read-only grid stalls, save the live session as on manual stop and retain the journal.
+    # ==========================================
+    def monitor_with_recovery(self, config, artifacts):
+        deadline=None
+        for restart in range(2):
+            if self.stop_event.is_set():
+                raise InterruptedError('监测已停止，不再重建浏览器')
+            with open_browser(config,self.auth_dir) as (context,page):
+                journal=None
+                try:
+                    page.goto(HOME_URL,wait_until='domcontentloaded')
+                    client=DirectoryClient(page,stop=self.stop_event.is_set,progress=self.log)
+                    client.authenticated()
+                    self.auth_status='已登录'
+                    self.emit('auth',self.auth_status)
+                    current=config
+                    timed=(config.max_poll_seconds>0 and not config.monitor_until_complete and not config.repeat_rules
+                           and not any(goal.rush.enabled for goal in config.goals))
+                    if deadline is None and timed:
+                        delay=max(0,parse_start(config.start_at,config.timezone).timestamp()-time.time()) if config.start_at else 0
+                        deadline=time.monotonic()+delay+config.max_poll_seconds
+                    elif deadline is not None:
+                        remaining=deadline-time.monotonic()
+                        if remaining<=0:
+                            self.result={'status':'pending','message':'监测时长已到，未继续重建后的读取'}
+                            self.log(self.result['message'])
+                            return
+                        current=replace(config,max_poll_seconds=remaining)
+                    journal=Journal(self.auth_dir/'journal.sqlite3')
+                    self.result=run_reservation(page,current,journal,artifacts,True,self.progress,
+                                                self.stop_event.is_set,self.persist_daily,prepare_auth=client.authenticated)
+                    self.log(self.result['message'])
+                    if not page.is_closed() and origin_of(page.url)==origin_of(HOME_URL):
+                        save_session(context,page,self.auth_dir,origin_of(HOME_URL))
+                    return
+                except GridReadStalled as exc:
+                    evidence(page,Path(artifacts)/f'read-recovery-{restart+1}',{'status':'read_stalled','message':str(exc)})
+                    if restart:
+                        raise RuntimeError('重建浏览器后仍连续读取超时，已停止自动重试；请检查网络、登录和网站状态。'+str(exc)) from exc
+                    if self.stop_event.is_set():
+                        raise InterruptedError('已停止，不再重建浏览器') from exc
+                    if not page.is_closed() and origin_of(page.url)==origin_of(HOME_URL):
+                        save_session(context,page,self.auth_dir,origin_of(HOME_URL))
+                    self.log('连续网格读取超时，正在重建一次监测浏览器；登录和已有订单进度保留，不重复提交已完成订单')
+                except Exception as exc:
+                    if not isinstance(exc,InterruptedError):
+                        evidence(page,artifacts,{'status':'error','message':str(exc)})
+                    raise
+                finally:
+                    if journal:
+                        journal.close()
+
+    # ==========================================
     # Function: Run authenticated browser work without touching native widgets.
     # Method: Persist daily occurrences on this worker before monitoring their shared inventory.
     # ==========================================
@@ -284,6 +339,9 @@ class DesktopController(Controller):
         artifacts = self.config_path.parent / "artifacts" / datetime.now().strftime("native-%Y%m%d-%H%M%S-%f")
         try:
             with account_lock(self.auth_dir):
+                if operation=='run':
+                    self.monitor_with_recovery(config,artifacts)
+                    return
                 if operation == "catalog" and self.cache.load() is not None:
                     self.catalog = self.cache.load()
                     self.emit("catalog", self.catalog)
@@ -301,17 +359,7 @@ class DesktopController(Controller):
                             client.authenticated()
                             self.auth_status = "已登录"
                             self.emit("auth", self.auth_status)
-                            if operation == "catalog":
-                                self.ensure_directory(page, client)
-                            else:
-                                journal = Journal(self.auth_dir / "journal.sqlite3")
-                                try:
-                                    self.result = run_reservation(page, config, journal, artifacts, True,
-                                                                  self.progress, self.stop_event.is_set, self.persist_daily,
-                                                                  prepare_auth=client.authenticated)
-                                    self.log(self.result["message"])
-                                finally:
-                                    journal.close()
+                            self.ensure_directory(page, client)
                             if not page.is_closed() and origin_of(page.url) == origin_of(HOME_URL):
                                 save_session(context, page, self.auth_dir, origin_of(HOME_URL))
                     except Exception as exc:

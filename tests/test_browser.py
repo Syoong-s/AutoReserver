@@ -82,6 +82,7 @@ class BrowserTests(unittest.TestCase):
         self.config = Config(booking_url=self.base, venue="模拟健身中心", sport="健身房",
                              targets=[self.target], headless=True, max_poll_seconds=1,
                              action_timeout_ms=3000, result_timeout_seconds=1,
+                             grid_timeout_seconds=3,
                              verification_timeout_seconds=3)
         self.journal = Journal(self.root / "auth" / "journal.sqlite3")
 
@@ -417,6 +418,34 @@ class BrowserTests(unittest.TestCase):
             self.assertEqual(page.evaluate("inventoryRequests"), 1)
             self.assertEqual(len(navigations), 1)
             self.assertTrue(all(g["check_count"] == 2 for g in result["goals"]))
+
+    # ==========================================
+    # Function: Recover a transient date timeout without downloading the booking page again.
+    # Method: Fail one read before its native click, then require one document navigation and one order.
+    # ==========================================
+    def test_date_timeout_reuses_current_document(self):
+        later = replace(self.target, date=(self.today + timedelta(days=1)).isoformat())
+        goal = Goal('date-recovery', '日期读取恢复', [later])
+        original, attempts, navigations = SjtuPage.choose_date, [], []
+
+        # ==========================================
+        # Function: Model a transient unfinished date read without altering browser state.
+        # Method: Raise once and delegate subsequent attempts to the actual site adapter.
+        # ==========================================
+        def delayed_date(site, value):
+            attempts.append(value)
+            if len(attempts) == 1:
+                raise GridNotReady('预约网格加载超时')
+            return original(site, value)
+
+        with self.browser(goals=[goal], targets=[], monitor_until_complete=True) as (config, _, page):
+            page.on('framenavigated', lambda frame: navigations.append(frame.url) if frame == page.main_frame else None)
+            with patch.object(SjtuPage, 'choose_date', delayed_date):
+                result = run_reservation(page, config, self.journal, self.root / 'artifacts', True)
+            self.assertEqual(result['status'], 'completed')
+            self.assertEqual(len(navigations), 1)
+            self.assertEqual(len(attempts), 2)
+            self.assertEqual(page.evaluate('submitClicks'), 1)
 
     # ==========================================
     # Function: Respect a native read throttle without falsely submitting stale data.

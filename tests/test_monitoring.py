@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import unittest
 
 from autoreserve.config import Config, load_config
-from autoreserve.monitoring import AccessDenied, ReadDeferred, ReadPacer, retry_after_seconds
+from autoreserve.monitoring import AccessDenied, GridReadStalled, ReadDeferred, ReadPacer, retry_after_seconds
 
 
 # ==========================================
@@ -176,6 +176,52 @@ class MonitoringTests(unittest.TestCase):
             Config(poll_interval_seconds=3).validate()
         with self.assertRaises(ValueError):
             Config(poll_jitter_ratio=-0.2).validate()
+
+    # ==========================================
+    # Function: Avoid clearing a failing grid cycle merely because its document loaded successfully.
+    # Method: Interleave partial healthy reads and require the exponential error streak to survive until a full cycle.
+    # ==========================================
+    def test_partial_reads_do_not_clear_backoff(self):
+        self.pacer.defer('网格超时')
+        self.clock.now=self.pacer.cooldown_until
+        self.pacer.healthy(complete_cycle=False)
+        self.pacer.defer('再次网格超时')
+        self.assertEqual(self.pacer.failures,2)
+        self.assertAlmostEqual(self.pacer.cooldown_until-self.clock.now,60)
+        self.assertEqual(self.pacer.state()['interval_seconds'],60)
+        self.pacer.healthy()
+        self.pacer.healthy()
+        self.assertEqual(self.pacer.adaptive_level,2)
+        self.pacer.healthy()
+        self.assertEqual(self.pacer.adaptive_level,1)
+
+    # ==========================================
+    # Function: Count chained throttle responses as one failed read lease and retain the longest server cooldown.
+    # Method: Deliver two native responses before the next lease and verify one increment plus Retry-After preservation.
+    # ==========================================
+    def test_chained_server_errors_share_one_cooldown(self):
+        url='https://sports.sjtu.edu.cn/manage/fieldDetail/queryFieldSituation'
+        self.pacer.observe(SimpleNamespace(url=url,status=429,headers={'retry-after':'30'}))
+        self.pacer.observe(SimpleNamespace(url=url,status=503,headers={'retry-after':'120'}))
+        self.assertEqual(self.pacer.failures,1)
+        self.assertEqual(self.pacer.cooldown_until,120)
+        self.assertIn('120',self.pacer.reason)
+
+    # ==========================================
+    # Function: Request one fresh-browser recovery only after a repeated read-only grid stall.
+    # Method: Preserve stall counts across partial reads, clear them on full success and keep throttles separate.
+    # ==========================================
+    def test_grid_stalls_are_separate_from_server_throttles(self):
+        self.pacer.grid_failed('遮罩未消失')
+        self.pacer.healthy(complete_cycle=False)
+        with self.assertRaises(GridReadStalled):
+            self.pacer.grid_failed('仍有未完成请求')
+        self.pacer.healthy()
+        self.assertEqual(self.pacer.grid_failures,0)
+        self.pacer.grid_failed('第一次')
+        self.pacer.observe(SimpleNamespace(url='https://sports.sjtu.edu.cn/manage/fieldDetail/queryFieldSituation',
+                                          status=429,headers={}))
+        self.assertEqual(self.pacer.grid_failures,0)
 
 
 if __name__ == "__main__":

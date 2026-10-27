@@ -9,8 +9,8 @@ import re
 import time
 from urllib.parse import urlsplit
 
-from .monitoring import READ_ENDPOINTS, ReadDeferred
-from .catalog import ANY_COURT
+from .monitoring import READ_ENDPOINTS, ReadDeferred, AccessDenied
+from .catalog import ANY_COURT, LoginRequired
 
 ROOT = "#apointmentDetails"
 
@@ -148,11 +148,13 @@ class SjtuPage:
         self.config = config
         self.stop = stop or (lambda: False)
         self._pending_reads = set()
+        self._read_error = None
         self._read_revision = 0
         page.on("request", self._read_started)
         page.on("requestfinished", self._read_finished)
         page.on("requestfailed", self._read_finished)
         page.on('framenavigated', self._navigated)
+        page.on('response',self._read_response)
 
     # ==========================================
     # Function: Prevent reuse of a settled DOM result across document navigations.
@@ -161,6 +163,9 @@ class SjtuPage:
     def _navigated(self, frame):
         if frame == self.page.main_frame:
             self._settled = None
+            self._read_revision+=1
+            self._pending_reads.clear()
+            self._read_error=None
 
     # ==========================================
     # Function: Track the site's own chained availability reads.
@@ -181,6 +186,26 @@ class SjtuPage:
         if request in self._pending_reads:
             self._pending_reads.remove(request)
             self._read_revision += 1
+            if request.failure and self._read_error is None:
+                self._read_error=GridNotReady('场馆数据请求中断，未取得新的空位结果')
+
+    # ==========================================
+    # Function: Stop waiting for a DOM update when its data request explicitly failed.
+    # Method: Classify only same-origin inventory responses and leave server retry timing to the shared pacer.
+    # ==========================================
+    def _read_response(self, response):
+        parsed,origin=urlsplit(response.url),urlsplit(self.config.booking_url)
+        if ((parsed.scheme,parsed.netloc)!=(origin.scheme,origin.netloc) or
+                not any(parsed.path.endswith(path) for path in READ_ENDPOINTS)):
+            return
+        if isinstance(self._read_error,(LoginRequired,AccessDenied)):
+            return
+        if response.status==401:
+            self._read_error=LoginRequired('场馆接口返回 HTTP 401，登录已失效，请重新登录')
+        elif response.status==403:
+            self._read_error=AccessDenied('场馆接口返回 HTTP 403，已停止监测，请人工检查')
+        elif response.status in {429,500,502,503,504}:
+            self._read_error=ReadDeferred(f'场馆接口返回 HTTP {response.status}，等待全局退避')
 
     # ==========================================
     # Function: Release request observers when switching between venue projects.
@@ -191,6 +216,7 @@ class SjtuPage:
         self.page.remove_listener("requestfinished", self._read_finished)
         self.page.remove_listener("requestfailed", self._read_finished)
         self.page.remove_listener('framenavigated', self._navigated)
+        self.page.remove_listener('response',self._read_response)
         self._pending_reads.clear()
 
     # ==========================================
@@ -198,12 +224,23 @@ class SjtuPage:
     # Method: Await native reads, overlay removal, expected tabs, and a quiet DOM window.
     # ==========================================
     def loaded_snapshot(self, expected_date=None, expected_sport=None):
-        deadline = time.monotonic() + self.config.action_timeout_ms / 1000
+        deadline = time.monotonic() + self.config.grid_timeout_seconds
         previous, stable_since = None, None
+        reason='预约网格尚未出现'
         while time.monotonic() < deadline:
             if self.stop():
                 raise InterruptedError("用户停止监测")
+            if self._read_error:
+                raise self._read_error
+            actual,expected=urlsplit(self.page.url),urlsplit(self.config.booking_url)
+            if actual.netloc and (actual.scheme,actual.netloc)!=(expected.scheme,expected.netloc):
+                raise LoginRequired('预约页面已跳转离开场馆网站，请重新登录')
             shot = self.snapshot()
+            reason=('预约网格尚未出现' if not shot else
+                    f'仍有 {len(self._pending_reads)} 个场馆数据请求未完成' if self._pending_reads else
+                    '页面加载遮罩尚未消失' if shot['loading'] else
+                    '预约日历尚未返回' if not shot['dates'] else
+                    '日期或项目尚未切换到目标，或页面仍在更新')
             now = time.monotonic()
             if (shot and shot["dates"] and not shot["loading"] and not self._pending_reads and
                     (expected_date is None or shot["active_date"] == expected_date) and
@@ -224,7 +261,7 @@ class SjtuPage:
                 previous, stable_since = None, None
             # This pumps Playwright events; it neither refreshes nor requests inventory.
             self.page.wait_for_timeout(50)
-        raise GridNotReady("预约网格加载超时，稍后按全局间隔重试")
+        raise GridNotReady(f"预约网格加载超时（等待 {self.config.grid_timeout_seconds:g} 秒；{reason}）")
 
     # ==========================================
     # Function: Wait until the reservation page is ready.
@@ -255,6 +292,9 @@ class SjtuPage:
     # Method: Target Element UI's date tab ID and wait for its loaded panel.
     # ==========================================
     def choose_date(self, value):
+        self._read_error=None
+        if self._pending_reads:
+            self.loaded_snapshot(expected_sport=self.config.sport)
         tab = self.page.locator(ROOT + f' .chart [role="tab"][id="tab-{value}"]')
         if tab.count() == 0:
             return False
