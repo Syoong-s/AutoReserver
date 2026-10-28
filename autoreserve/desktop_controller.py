@@ -252,7 +252,7 @@ class DesktopController(Controller):
 
     # ==========================================
     # Function: Remember exact court labels learned during active monitoring.
-    # Method: Update a separate names cache only when names change, never refresh metadata.
+    # Method: Tag progress with its monitored goal and update cached court labels without metadata refreshes.
     # ==========================================
     def progress(self, event):
         incoming = {g['id'] for g in event.get('goals',[])}
@@ -274,7 +274,7 @@ class DesktopController(Controller):
                 self._completed_seen.add(identity)
                 self.emit("goal_completed", {"id": goal["id"], "name": goal.get("name", "预约目标"),
                                               "detail": dict(detail)})
-        self.emit("progress", event)
+        self.emit("progress", event | {'identity':self.active_identity})
 
     # ==========================================
     # Function: Read cached court labels for the selected project without network traffic.
@@ -301,7 +301,7 @@ class DesktopController(Controller):
 
     # ==========================================
     # Function: Start an explicitly authorized login, metadata read, or selected-goal monitoring session.
-    # Method: Scope workers to independent goals or templates, reject direct occurrence starts and serialize account actions.
+    # Method: Capture the selected identity before worker launch and name the scoped goal explicitly in its activity log.
     # ==========================================
     def start(self, operation, date=None, goal_id=None):
         if operation not in {"login", "catalog", "run"}:
@@ -364,6 +364,9 @@ class DesktopController(Controller):
             self.stop_event.clear()
             self.capture_event.clear()
             self.emit("busy", operation)
+            if operation=='run' and goal_id is not None:
+                name=rule.name if goal_id.startswith('rule:') else goal.name
+                self.log(f'开始监测当前目标：{name}；仅处理此目标及其场馆备选')
             self.worker = threading.Thread(target=self.work, args=(operation, config, None), daemon=True)
             self.worker.start()
 

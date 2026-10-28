@@ -30,7 +30,7 @@ class RushBrowserTests(unittest.TestCase):
 
     # ==========================================
     # Function: Discover a seventh-day tab published after the first release-time calendar refresh.
-    # Method: Serve date tabs based on wall time and require fresh navigations, one order and no pre-release selection.
+    # Method: Keep the first release response unopened despite renderer latency and require fresh hash-route calendar requests.
     # ==========================================
     def test_unopened_seventh_day_reloads_until_published(self):
         goal,release=self.timed_goal()
@@ -38,25 +38,29 @@ class RushBrowserTests(unittest.TestCase):
         goal=replace(goal,candidates=[target])
         opens=release+1.0
         document=(Path(__file__).resolve().parents[1]/'demo/index.html').read_text()
-        document=document.replace('Array.from({length: 7}',f'Array.from({{length: (Date.now() >= {opens*1000:.3f} ? 8 : 7)}}')
         navigations,submits,events=[],[],[]
+        published=[]
 
         # ==========================================
         # Function: Publish the future date only when the browser requests a calendar after its opening.
-        # Method: Re-evaluate the document clock on each navigation rather than mutating the prewarmed page.
+        # Method: Publish only after opening and a second release request, avoiding assumptions about renderer start latency.
         # ==========================================
         def calendar(route):
             navigations.append(time.time())
-            route.fulfill(content_type='text/html',body=document)
+            opened=navigations[-1]>=opens and sum(at>=release for at in navigations)>1
+            published.append(opened)
+            body=document.replace('Array.from({length: 7}',f'Array.from({{length: {8 if opened else 7}}}')
+            route.fulfill(content_type='text/html',body=body)
 
         with self.browser(goals=[goal],targets=[],max_poll_seconds=12) as (config,_,page),patch('autoreserve.runner.ReadPacer',ReadPacer):
+            config.booking_url+='#/late-date'
             page.route(self.base+'/?scenario=success',calendar)
             page.on('request',lambda request:submits.append(time.time()) if request.url.endswith('/ConfirmOrder') else None)
             result=run_reservation(page,config,self.journal,self.root/'artifacts',True,events.append,
                                    stop=lambda:time.time()>release+15)
             self.assertEqual(result['status'],'completed')
             self.assertGreaterEqual(len(navigations),3)
-            self.assertTrue(any(release<=at<opens for at in navigations))
+            self.assertFalse(next(opened for at,opened in zip(navigations,published) if at>=release))
             self.assertTrue(any(at>=opens for at in navigations))
             self.assertEqual(len(submits),1)
             self.assertGreaterEqual(submits[0],opens)

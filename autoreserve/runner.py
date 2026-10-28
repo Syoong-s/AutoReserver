@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 
 from .config import parse_start
 from .catalog import LoginRequired
+from .browser import navigate_booking
 from .monitoring import AccessDenied, ReadDeferred, ReadPacer
 from .sjtu import GridNotReady, SjtuPage, candidate_cells, expand_candidates
 from .state import private_json
@@ -143,7 +144,7 @@ def submit_once(page, button, config, target, journal, task_key=None):
 
 # ==========================================
 # Function: Poll prioritized alternatives and produce at most one order.
-# Method: Refresh serially within a monotonic time budget; never poll after submit.
+# Method: Enter fresh booking documents and refresh serially within a monotonic budget; never poll after submit.
 # ==========================================
 def run_reservation(page, config, journal, artifacts, submit=False, progress=None, stop=None, refresh=None, prepare_auth=None):
     if config.goals or config.repeat_rules:
@@ -154,7 +155,7 @@ def run_reservation(page, config, journal, artifacts, submit=False, progress=Non
     journal.ensure_new(config)
     stop = stop or (lambda: False)
     site = SjtuPage(page, config)
-    page.goto(config.booking_url, wait_until="domcontentloaded")
+    navigate_booking(page,config.booking_url)
     site.ready()
     site.choose_sport()
     wait_for_start(config, stop)
@@ -288,10 +289,10 @@ def run_plan(page, config, journal, artifacts, submit=False, progress=None, stop
 
     # ==========================================
     # Function: Reload the booking page only when navigation or calendar expiry requires it.
-    # Method: Charge one shared read budget for this native page transition.
+    # Method: Charge one shared read budget and reinitialize hash-routed calendar data instead of reusing a stale component.
     # ==========================================
     def load_booking():
-        page.goto(config.booking_url, wait_until="domcontentloaded")
+        navigate_booking(page,config.booking_url)
         site.ready()
         return site.choose_sport()
 

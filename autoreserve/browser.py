@@ -16,6 +16,18 @@ PAYMENT_PATTERN = re.compile(
 
 
 # ==========================================
+# Function: Enter a booking route with freshly initialized venue and calendar data.
+# Method: Leave a reused hash-routed document before navigation so Vue cannot retain another venue's mounted component.
+# ==========================================
+def navigate_booking(page, url):
+    current,target=urlsplit(page.url),urlsplit(url)
+    if (current._replace(fragment='')==target._replace(fragment='')
+            and (current.fragment or target.fragment)):
+        page.goto('about:blank',wait_until='domcontentloaded')
+    return page.goto(url,wait_until='domcontentloaded')
+
+
+# ==========================================
 # Function: Refuse payment requests in the automated browser.
 # Method: Abort known payment routes before a network request is sent.
 # ==========================================

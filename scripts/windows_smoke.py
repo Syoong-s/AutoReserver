@@ -88,7 +88,7 @@ def check_window(app):
 
 # ==========================================
 # Function: Exercise the portable runtime independently of tests, demo files or repository metadata.
-# Method: Use isolated native windows and loopback fixtures, including template history, delayed date publication and submission latency.
+# Method: Verify isolated windows and loopback fixtures, including scoped target activity and fresh hash-routed venue navigation.
 # ==========================================
 def self_test(root, test_source=None):
     root = Path(root)
@@ -160,6 +160,8 @@ def self_test(root, test_source=None):
             'test_template_occurrences_panel_and_running_dot',
             'test_selected_toolbar_save_retains_unrelated_incomplete_draft',
             'test_toolbar_start_uses_captured_goal_identity',
+            'test_toolbar_starts_second_native_selected_goal',
+            'test_goal_activity_follows_selection_and_background_scope',
             'test_completed_sidebar_delete_and_history_record_delete',
             'test_closed_history_window_ignores_inflight_read'))
         cases.extend(GtkWorkspaceTests(name) for name in (
@@ -171,6 +173,8 @@ def self_test(root, test_source=None):
                       BrowserTests('test_history_delete_allows_new_goal_for_identical_slot'),
                       BrowserTests('test_zero_duration_and_price_allow_unlimited_preview'),
                       MultiVenueTests('test_zero_duration_continues_until_stopped'),
+                      MultiVenueTests('test_hash_route_venue_switch_reloads_document'),
+                      MultiVenueTests('test_failed_first_venue_does_not_skip_second_goal'),
                       RushBrowserTests('test_release_gates_selection_and_discards_prewarm_stock'),
                       RushBrowserTests('test_unopened_seventh_day_reloads_until_published')])
         cases.extend(DirectoryBrowserTests(name) for name in (

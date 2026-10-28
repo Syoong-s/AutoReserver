@@ -302,7 +302,7 @@
                 </child>
                 <child>
                   <object class="GtkButton" id="start">
-                    <property name="label">开始监测  →</property>
+                    <property name="label">监测当前目标  →</property>
                     <property name="tooltip-text">仅启动当前选中的预约目标或重复模板</property>
                     <property name="valign">center</property>
                     <style>

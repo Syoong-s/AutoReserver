@@ -3,6 +3,7 @@
 from dataclasses import replace
 from contextlib import contextmanager
 from datetime import timedelta
+from pathlib import Path
 import os
 import unittest
 from urllib.parse import urlencode
@@ -29,6 +30,57 @@ class MultiVenueTests(unittest.TestCase):
     setUp = fixtures.BrowserTests.setUp
     tearDown = fixtures.BrowserTests.tearDown
     browser = fixtures.BrowserTests.browser
+
+    # ==========================================
+    # Function: Switch real hash-routed venue pages whose component data is initialized only on document load.
+    # Method: Use two student-center routes on one document URL and require the second venue's fresh stock and one order.
+    # ==========================================
+    def test_hash_route_venue_switch_reloads_document(self):
+        url=self.base+'/?scenario=success'
+        first=replace(self.target,context=BookingContext(url+'#/student','学生中心','健身房'))
+        second=replace(self.target,context=BookingContext(url+'#/north','北校区学生中心','健身房'))
+        goal=Goal('hash-venues','两处学生中心',[first,second])
+        document=(Path(__file__).resolve().parents[1]/'demo/index.html').read_text()
+        document=document.replace("const scenario = params.get('scenario')", "params.set('venue',location.hash==='#/north'?'北校区学生中心':'学生中心');\n"
+                                  "params.set('scenario',location.hash==='#/north'?'success':'soldout');\nconst scenario = params.get('scenario')")
+        events,submits=[],[]
+        with self.browser(goals=[goal],targets=[]) as (config,_,page):
+            page.route(url,lambda route:route.fulfill(content_type='text/html',body=document))
+            page.on('request',lambda request:submits.append(page.url) if request.url.endswith('/ConfirmOrder') else None)
+            result=run_reservation(page,config,self.journal,self.root/'artifacts',True,events.append)
+            self.assertEqual(result['status'],'completed')
+            self.assertEqual(result['goals'][0]['detail']['venue'],'北校区学生中心')
+            self.assertTrue(any(e['message'].startswith('已检查 学生中心 /') for e in events))
+            self.assertTrue(any(e['message'].startswith('已检查 北校区学生中心 /') for e in events))
+            self.assertEqual(len(submits),1)
+            self.assertEqual(page.evaluate('payClicks'),0)
+
+    # ==========================================
+    # Function: Keep a failed first venue from starving an independent target in a second venue.
+    # Method: Fail the first grid once and require the available second target to submit within the same monitoring cycle.
+    # ==========================================
+    def test_failed_first_venue_does_not_skip_second_goal(self):
+        goals=[Goal('stalled','读取失败',[self.target_at('A馆')]),Goal('available','正常场馆',[self.target_at('B馆')])]
+        original=SjtuPage.ready
+        attempts=[]
+
+        # ==========================================
+        # Function: Reproduce one venue's initial grid timeout without failing the whole account.
+        # Method: Raise the normal recoverable read exception for A and delegate B to real Chromium DOM checks.
+        # ==========================================
+        def ready(site):
+            attempts.append(site.config.venue)
+            if site.config.venue=='A馆':
+                raise GridNotReady('A馆模拟网格读取超时')
+            return original(site)
+
+        events=[]
+        with self.browser(goals=goals,targets=[]) as (config,_,page),patch.object(SjtuPage,'ready',ready):
+            result=run_reservation(page,config,self.journal,self.root/'artifacts',True,events.append,
+                                   stop=lambda:any(e['message'].startswith('等待空位，') for e in events))
+            self.assertIn('B馆',attempts)
+            self.assertEqual(next(g for g in result['goals'] if g['id']=='available')['status'],'submitted')
+            self.assertEqual(len(self.journal.entries()),1)
 
     # ==========================================
     # Function: Build an exact scoped target for one local venue/project.

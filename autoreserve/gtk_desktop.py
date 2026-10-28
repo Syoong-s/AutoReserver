@@ -35,7 +35,7 @@ STATUS = {'pending':'等待空位','submitted':'已下单','preview':'已预览'
 class GtkDesktop:
     # ==========================================
     # Function: Build an offline workspace with real GTK scroll containers and CSD windows.
-    # Method: Load native views before mapping and retain template-owned occurrence history separately from sidebar controls.
+    # Method: Retain per-goal activity alongside native views so selection changes cannot show another goal's results.
     # ==========================================
     def __init__(self, controller, native=None, application=None, auto_catalog=True):
         self.g = native or GtkNative()
@@ -55,6 +55,7 @@ class GtkDesktop:
         self._occurrence_signature = None
         self.court_buttons, self.hour_buttons = {}, {}
         self.logs, self.snapshot = [], None
+        self.activity,self._activity_identity = {},None
         self.monitor_started, self._inventory_signature = False, None
         self.font_provider = None
         self.font_spin = None
@@ -584,18 +585,20 @@ class GtkDesktop:
 
     # ==========================================
     # Function: Show the selected goal's release phase and honest clock-estimate precision.
-    # Method: Update only changed captions and derive the live countdown from a monotonic deadline.
+    # Method: Show a countdown only for the selected running scope and derive it from the monotonic deadline.
     # ==========================================
     def render_rush(self):
         g=self.g
+        running=(self.controller.busy and self.controller.operation=='run'
+                 and (not self.controller.active_identity or self.controller.active_identity==self.model.selected))
         enabled=bool((self.model.get() or {}).get('rush',{}).get('enabled'))
         g.style(self.rush_expander,'rush-enabled',enabled)
         caption='抢购功能设置 · 已开启' if enabled else '抢购功能设置'
         if caption!=getattr(self,'_rush_caption',None):
             self._rush_caption=caption
             g.gtk_expander_set_label(self.rush_expander,caption.encode())
-        state=self.model.states.get(self.model.selected,{}).get('rush') if self.controller.busy else None
-        if not state and self.controller.busy and self.model.repeating() and self.model.get():
+        state=self.model.states.get(self.model.selected,{}).get('rush') if running else None
+        if not state and running and self.model.repeating() and self.model.get():
             instances=[self.model.states[g['id']] for g in self.model.data['goals']
                        if g.get('repeat_id')==self.model.get()['id'] and g['id'] in self.model.states
                        and self.model.states[g['id']].get('status') in {'pending','rejected','preview'}
@@ -608,7 +611,7 @@ class GtkDesktop:
         else:
             status=self.model.states.get(self.model.selected,{}).get('status')
             text=('开启后保存并开始监测，将按此目标时间准备。' if not enabled else
-                  '抢购已开启 · 等待下一次执行日或准备阶段。' if self.controller.busy else
+                  '抢购已开启 · 等待下一次执行日或准备阶段。' if running else
                   f'本次执行：{STATUS.get(status,status)}' if status and status!='pending' else
                   '已开启 · 准备和开抢按此目标单独执行，尚未启动。')
         if text!=self._rush_status_text:
@@ -907,7 +910,7 @@ class GtkDesktop:
 
     # ==========================================
     # Function: Update sidebar rows without resetting scroll position on status events.
-    # Method: Keep generated executions inside their template and reuse sidebar rows and running indicators.
+    # Method: Keep generated executions inside their template and distinguish the active scope from other pending rows.
     # ==========================================
     def render_sidebar(self):
         g=self.g
@@ -956,7 +959,9 @@ class GtkDesktop:
                 text=f"{schedule} {at} · {'运行中' if running else '待启动' if item['enabled'] else '已暂停'}"
             else:
                 status='检查中' if state.get('watch_state')=='checking' else '退避等待' if state.get('watch_state')=='backoff' else STATUS.get(state.get('status','pending'),'需处理')
-                if status=='等待空位' and not (self.controller.busy and self.controller.operation=='run'):
+                active=(self.controller.busy and self.controller.operation=='run'
+                        and (not self.controller.active_identity or self.controller.active_identity==key))
+                if state.get('status','pending') in {'pending','rejected'} and not active:
                     status='待启动'
                 text=f"{self.model.day(key)} · {status}"
             if item.get('rush',{}).get('enabled'):
@@ -1086,10 +1091,11 @@ class GtkDesktop:
 
     # ==========================================
     # Function: Load a selected goal into retained editor controls.
-    # Method: Restore target controls and independent history folds under a signal guard.
+    # Method: Restore target controls, scoped activity and independent history folds under a signal guard.
     # ==========================================
     def load_editor(self):
         g=self.g
+        self.switch_activity()
         self.loading=True
         item=self.model.get()
         g.text(self.name_entry,item['name'] if item else '')
@@ -1278,13 +1284,13 @@ class GtkDesktop:
 
     # ==========================================
     # Function: Update interaction locks only when the effective busy/editor state changes.
-    # Method: Lock history deletion with other mutations while preserving stop, scrolling and inspection.
+    # Method: Lock mutations during work and distinguish the selected goal from an operation running for another goal.
     # ==========================================
     def set_busy(self):
         g=self.g
         busy=self.controller.busy or self.saving
         recorded=not self.model.repeating() and self.model.states.get(self.model.selected,{}).get('status','pending') not in {'pending','preview'}
-        signature=(busy,self.controller.operation,self.model.selected,recorded,self._court_scope,len(self.sidebar_rows))
+        signature=(busy,self.controller.operation,self.controller.active_identity,self.model.selected,recorded,self._court_scope,len(self.sidebar_rows))
         if signature==self._busy:
             return
         self._busy=signature
@@ -1313,7 +1319,31 @@ class GtkDesktop:
         g.gtk_widget_set_visible(self.w['capture'],self.controller.busy and self.controller.operation=='login')
         g.gtk_widget_set_visible(self.w['stop'],self.controller.busy)
         self.paint_status_rows()
-        g.label(self.w['run_badge'],'保存中' if self.saving else '监测中' if self.controller.operation=='run' else '登录中' if self.controller.busy else '待命')
+        monitoring=self.controller.busy and self.controller.operation=='run'
+        current=not self.controller.active_identity or self.controller.active_identity==self.model.selected
+        g.label(self.w['run_badge'],'保存中' if self.saving else '当前目标监测中' if monitoring and current else
+                '其他目标监测中' if monitoring else '登录中' if self.controller.busy else '待命')
+
+    # ==========================================
+    # Function: Restore execution logs and availability belonging to the selected target.
+    # Method: Save the previous view in memory and keep independent buffers without launching any browser action.
+    # ==========================================
+    def switch_activity(self):
+        identity=self.model.selected
+        if identity==self._activity_identity:
+            return
+        if self._activity_identity is not None:
+            self.activity[self._activity_identity]={'logs':list(self.logs),'snapshot':self.snapshot,
+                'started':self.monitor_started,'next_read_at':self.next_read_at}
+        state=self.activity.get(identity,{})
+        self._activity_identity=identity
+        self.logs=list(state.get('logs',[]))
+        self.monitor_started=state.get('started',False)
+        self.next_read_at=state.get('next_read_at')
+        self.render_logs()
+        self.render_inventory(state.get('snapshot'))
+        item=self.model.get() or {}
+        self.g.label(self.w['status'],self.logs[-1] if self.logs else f"当前目标：{item.get('name','未选择')} · 尚无执行记录")
 
     # ==========================================
     # Function: Restore optional native controls after the initial show-all traversal.
@@ -1327,27 +1357,41 @@ class GtkDesktop:
 
     # ==========================================
     # Function: Launch an explicitly requested browser action.
-    # Method: Delegate to the existing serialized worker without blocking GTK.
+    # Method: Require a selected target, reset only its activity and delegate its captured identity to the worker.
     # ==========================================
     def action(self, operation, identity=None):
         if operation=='run':
-            self.controller.start(operation,goal_id=identity or self.model.selected)
+            identity=identity or self.model.selected
+            if not identity or self.model.get(identity) is None:
+                raise ValueError('请先选择要监测的目标')
+            self.controller.start(operation,goal_id=identity)
+            self.activity[identity]={'logs':[],'snapshot':None,'started':True,'next_read_at':None}
+            if identity==self.model.selected:
+                self.logs=[]
+                self.render_logs()
         else:
             self.controller.start(operation)
         self.g.gtk_widget_hide(self.w['error_bar'])
-        if operation=='run':
+        if operation=='run' and identity==self.model.selected:
             self.monitor_started=True
             self.render_inventory(None)
         self.set_busy()
 
     # ==========================================
     # Function: Persist only the selected target while retaining other unsaved and incomplete goal drafts.
-    # Method: Send a scoped projection to the worker; global settings and explicit save-all-on-exit use separate scopes.
+    # Method: Reconcile native row selection before capturing a scoped projection and keep settings and exit saves separate.
     # ==========================================
     def save(self, operation=None, scope=None):
         self.editing()
-        self.commit_current()
         scope=scope or ('all' if operation=='close' else 'goal')
+        if scope=='goal':
+            row=self.g.gtk_list_box_get_selected_row(self.w['goals'])
+            selected=next((key for key,widgets in self.sidebar_rows.items() if widgets[0]==row),None)
+            if selected and selected!=self.model.selected:
+                self.commit_current()
+                self.model.selected=selected
+                self.load_editor()
+        self.commit_current()
         identity=self.model.selected if scope=='goal' else None
         payload=self.model.payload(identity) if scope!='settings' else dict(self.model.data)
         replacements=set(self.model.replacements.get(identity,()))
@@ -1639,10 +1683,11 @@ class GtkDesktop:
 
     # ==========================================
     # Function: Keep live availability visible in its independently resizable native card.
-    # Method: Repaint only changed in-memory snapshots; never request availability from UI rendering.
+    # Method: Scope running hints to the selected target and repaint only changed in-memory snapshots.
     # ==========================================
     def render_inventory(self, shot):
-        running=self.controller.busy and self.controller.operation=='run'
+        running=(self.controller.busy and self.controller.operation=='run'
+                 and (not self.controller.active_identity or self.controller.active_identity==self.model.selected))
         signature=(shot,running,self.monitor_started)
         if signature==self._inventory_signature and self.g.children(self.w['inventory']):
             return
@@ -1708,7 +1753,7 @@ class GtkDesktop:
 
     # ==========================================
     # Function: Drain backend events without I/O or full workspace reconstruction per tick.
-    # Method: Bound each batch by time, coalesce progress, and process all completion events.
+    # Method: Route activity by captured target identity, coalesce visible progress and process all completion events.
     # ==========================================
     def tick(self):
         if self.destroyed:
@@ -1721,17 +1766,33 @@ class GtkDesktop:
                 break
             if kind=='log':
                 stamp=datetime.fromisoformat(value['time']).strftime('%H:%M:%S')
-                self.logs.append(f"{stamp}  {value['message']}")
-                self.g.label(self.w['status'],value['message'])
-                logs=True
+                identity=value.get('identity') or self.model.selected
+                line=f"{stamp}  {value['message']}"
+                if identity==self.model.selected:
+                    self.logs.append(line)
+                    self.g.label(self.w['status'],value['message'])
+                    logs=True
+                else:
+                    state=self.activity.setdefault(identity,{})
+                    state['logs']=('\n'.join([*state.get('logs',[]),line])).splitlines()[-50:]
             elif kind=='progress':
-                latest=value
-                if value.get('snapshot') is not None:
-                    latest_shot=value['snapshot']
+                self.model.states.update({s['id']:s for s in value.get('goals',[])})
+                identity=value.get('identity') or self.model.selected
+                if identity==self.model.selected:
+                    latest=value
+                    if value.get('snapshot') is not None:
+                        latest_shot=value['snapshot']
+                else:
+                    state=self.activity.setdefault(identity,{})
+                    state.update(started=True,next_read_at=value.get('monitor',{}).get('next_read_at'))
+                    if value.get('snapshot') is not None:
+                        state['snapshot']=value['snapshot']
+                    self.render_sidebar()
             elif kind=='busy' and value=='run':
                 latest,latest_shot=None,None
-                self.monitor_started=True
-                self.render_inventory(None)
+                if not self.controller.active_identity or self.controller.active_identity==self.model.selected:
+                    self.monitor_started=True
+                    self.render_inventory(None)
             elif kind=='goal_completed':
                 self.show_completion(value)
             elif kind=='states':
@@ -1818,7 +1879,8 @@ class GtkDesktop:
             self.render_logs()
         self.set_busy()
         self.render_rush()
-        if self.next_read_at and self.controller.busy:
+        if (self.next_read_at and self.controller.busy
+                and (not self.controller.active_identity or self.controller.active_identity==self.model.selected)):
             text=f'{self.controller.message} · 下次读取约 {max(0,int(self.next_read_at-time.time()))} 秒后'
             if text!=getattr(self,'_countdown',None):
                 self._countdown=text

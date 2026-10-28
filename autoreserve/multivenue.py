@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 from .monitoring import AccessDenied, ReadDeferred
 from .catalog import LoginRequired
+from .browser import navigate_booking
 from .repeat import materialize_daily, next_daily
 from .runner import attention_message, evidence, submit_once, wait_for_start
 from .sjtu import GridNotReady, SjtuPage, candidate_cells, expand_candidates
@@ -24,7 +25,7 @@ def target_context(config, target):
 
 # ==========================================
 # Function: Monitor all dates and alternative venues before choosing one order per goal.
-# Method: Share scoped snapshots, refresh calendars while dates are unopened and serialize every read through one pacer.
+# Method: Freshly load hash-routed venues, isolate failed reads and share scoped snapshots under one account limiter.
 # ==========================================
 def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pacer, refresh=None, prepare_auth=None):
     stop = stop or (lambda: False)
@@ -35,6 +36,7 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
     cycle_preparing = set()
     preparing_now = False
     last_auth_check = None
+    last_read_error = None
     guard_seconds = max(2, min(10, config.action_timeout_ms / 1000))
 
     # ==========================================
@@ -116,9 +118,11 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
 
     # ==========================================
     # Function: Execute exactly one network-producing monitor operation.
-    # Method: Pace all contexts together and discard throttled or unfinished snapshots.
+    # Method: Pace all contexts together and distinguish account-wide throttling from venue-local read failures.
     # ==========================================
     def read(operation):
+        nonlocal last_read_error
+        last_read_error=None
         wake = {'wake': boundary} if has_rush and submit else {}
         if not pacer.wait(page, stop, lambda info: publish(info["reason"] or "所有场馆共同监测，等待全局读取间隔"), **wake):
             if not stop() and has_rush and boundary():
@@ -132,6 +136,7 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
         except (AccessDenied,LoginRequired,InterruptedError):
             raise
         except Exception as exc:
+            last_read_error=exc
             defer(exc)
             return None
 
@@ -155,7 +160,7 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
 
     # ==========================================
     # Function: Load a venue/project only when switching or recovering requires it.
-    # Method: Replace scoped DOM observers before navigation and consume one read budget.
+    # Method: Replace scoped observers and force a fresh document when venue routes reuse the same hash-based application.
     # ==========================================
     def load(context):
         nonlocal current_context, site, effective, selected_dirty, last_calendar
@@ -165,7 +170,7 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
         site = SjtuPage(page, effective, stop)
         current_context = context
         last_calendar=time.monotonic()
-        page.goto(effective.booking_url, wait_until="domcontentloaded")
+        navigate_booking(page,effective.booking_url)
         site.ready()
         shot = site.choose_sport()
         selected_dirty, last_calendar = False, time.monotonic()
@@ -297,24 +302,33 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
                         continue
                     return finish("needs_attention",attention_message(states))
                 groups = list(dict.fromkeys((target_context(config, t), t.date) for g in pending for t in g.candidates))
-                snapshots, read_failed, rush_fast = {}, False, False
+                snapshots, read_failed, rush_fast, batch_limited = {}, False, False, False
                 for context, day in groups:
                     if stop():
                         raise InterruptedError("用户停止监测")
+                    publish(f'正在读取 {context[1]} / {context[2]} / {day}')
                     if (current_context != context or needs_load or (context, day) in unopened_dates
                             or time.monotonic() - last_calendar >= config.calendar_refresh_seconds):
                         seed = read(lambda context=context: load(context))
                         needs_load = seed is None
                         if seed is None:
                             read_failed = True
-                            break
+                            batch_limited=isinstance(last_read_error,ReadDeferred) and not isinstance(last_read_error,GridNotReady)
+                            if batch_limited:
+                                break
+                            publish(f'{context[1]} / {context[2]} / {day} 读取未完成，继续检查其他场馆')
+                            continue
                     if seed is not None and seed.get("active_date") == day:
                         shot, seed = seed, None
                     else:
                         shot = read(lambda day=day: date_read(day))
                     if shot is None:
                         needs_load, read_failed = not bool(page.locator('#apointmentDetails').count()), True
-                        break
+                        batch_limited=isinstance(last_read_error,ReadDeferred) and not isinstance(last_read_error,GridNotReady)
+                        if batch_limited:
+                            break
+                        publish(f'{context[1]} / {context[2]} / {day} 读取未完成，继续检查其他场馆')
+                        continue
                     snapshots[(context, day)] = shot
                     if shot.get('date_not_open'):
                         unopened_dates.add((context, day))
@@ -332,8 +346,9 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
                     if submit and rushed and best(rushed[0], snapshots) is not None:
                         rush_fast = True
                         break
-                if not read_failed:
-                    pacer.healthy()
+                if snapshots and not batch_limited:
+                    if not read_failed:
+                        pacer.healthy()
                     ready = [(g, best(g, snapshots)) for g in pending if not rush_fast or g.rush.enabled]
                     ready = [(g, t) for g, t in ready if t is not None]
                     publish(f"本轮已检查 {len(snapshots)} 个日期/场馆组合，发现 {len(ready)} 个可预约目标")
@@ -388,8 +403,6 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
                             completed = dict(states[goal.id]) if outcome["status"] == "submitted" else None
                             publish("目标已下单，其他未完成目标继续监测" if completed else outcome["message"], completed=completed)
                             needs_load, seed = True, None
-                            break
-                        if read_failed:
                             break
                 if not recurring and all(s["status"] == "submitted" for s in states.values()):
                     return finish("completed", "全部预约目标已提交成功；未执行付款")

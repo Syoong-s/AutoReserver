@@ -51,7 +51,9 @@ Download the portable archive matching your operating system from the repository
    - **Weekly Recurrence**: Click **Set as Repeat Goal (设为重复目标)** to convert the goal into a template, then choose the execution weekdays, trigger time, and target date offset.
    - **Timed-Release (Rush) Mode**: Toggle the **Rush Mode (抢购模式)** switch in the top-right corner. Enter the release date and time (accurate to the second), and configure preparation lead times. (See [Rush Mode Guide](docs/RUSH.md)).
 4. **Start Monitoring**:
-   Select a goal in the sidebar, click **Save Goal (保存目标)**, then **Start Monitoring (开始监测)**. Both actions apply only to that goal; other drafts remain untouched. Selecting a weekly template starts only that template and its own occurrences. Keep your computer and network connected. When a reservation succeeds, a native notification dialog will pop up. Visit the official portal promptly to pay.
+   Select a goal in the sidebar, click **Save Goal (保存目标)**, then **Monitor Selected Goal (监测当前目标)**. Startup resolves the actual selected sidebar row and names the goal in its log. Activity, availability and countdowns follow the selected goal; other drafts remain untouched. Selecting a weekly template starts only that template and its own occurrences. Keep your computer and network connected. When a reservation succeeds, a native notification dialog will pop up. Visit the official portal promptly to pay.
+
+Venue switches reload hash-routed booking documents to prevent stale venue data. Logs identify each venue/project/date before reading; a local grid failure does not skip other venues. Account-wide throttling, access denials and expired authentication retain their shared handling.
 
 ### 3. Remove Goals and Manage Order History
 

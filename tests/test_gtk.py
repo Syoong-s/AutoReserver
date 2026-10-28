@@ -805,6 +805,82 @@ class GtkWorkspaceTests(unittest.TestCase):
         self.assertEqual(app.errors,[])
 
     # ==========================================
+    # Function: Start the actual selected second goal instead of the first persisted goal.
+    # Method: Reconcile a native row change whose notification was suppressed, then capture the actual worker configuration.
+    # ==========================================
+    def test_toolbar_starts_second_native_selected_goal(self):
+        from autoreserve.state import private_json
+        app,g=self.app,self.g
+        first=app.model.selected
+        app.copy_goal(first)
+        second=app.model.selected
+        app.save()
+        app.save_worker.join(2)
+        self.wait_layout(lambda:not app.saving)
+        g.gtk_list_box_select_row(app.w['goals'],app.sidebar_rows[first][0])
+        g.gtk_list_box_select_row(app.w['goals'],app.sidebar_rows[second][0])
+        self.assertEqual(app.model.selected,second)
+        g.gtk_list_box_select_row(app.w['goals'],app.sidebar_rows[first][0])
+        app.loading=True
+        g.gtk_list_box_select_row(app.w['goals'],app.sidebar_rows[second][0])
+        app.loading=False
+        self.assertEqual(app.model.selected,first)
+        private_json(self.path/'auth/session.json',{})
+        configs=[]
+
+        # ==========================================
+        # Function: Capture the selected monitor plan without opening an external website.
+        # Method: Replace only browser work and let production save/start code choose and validate its configuration.
+        # ==========================================
+        def work(operation,config,date=None):
+            configs.append(config)
+            self.controller.busy=False
+
+        with patch.object(self.controller,'work',work):
+            g.gtk_button_clicked(app.w['start'])
+            app.save_worker.join(2)
+            self.wait_layout(lambda:bool(configs))
+            self.controller.worker.join(2)
+        self.assertEqual([goal.id for goal in configs[0].goals],[second])
+        self.assertEqual(self.controller.active_identity,second)
+        self.assertEqual(app.errors,[])
+
+    # ==========================================
+    # Function: Keep the first goal's logs and availability out of a selected second goal's workbench.
+    # Method: Switch actual GTK rows while queuing scoped foreground and background worker events.
+    # ==========================================
+    def test_goal_activity_follows_selection_and_background_scope(self):
+        app,g=self.app,self.g
+        first=app.model.selected
+        app.copy_goal(first)
+        second=app.model.selected
+        g.gtk_list_box_select_row(app.w['goals'],app.sidebar_rows[first][0])
+        self.controller.active_identity=first
+        shot={'venue':'学生中心','sport':'健身房','active_date':app.model.day(),'columns':['场地1'],
+              'times':['14:00-15:00'],'rows':[['available']]}
+        self.controller.log('第一个目标的记录')
+        self.controller.progress({'message':'第一个目标读取','goals':[],'snapshot':shot})
+        app.tick()
+        self.assertIn('第一个目标的记录','\n'.join(app.logs))
+        g.gtk_list_box_select_row(app.w['goals'],app.sidebar_rows[second][0])
+        self.assertEqual(app.logs,[])
+        self.assertIsNone(app.snapshot)
+        self.controller.log('第一个目标的后台记录')
+        self.controller.progress({'message':'后台读取','goals':[],'snapshot':shot})
+        app.tick()
+        self.assertEqual(app.logs,[])
+        self.assertIsNone(app.snapshot)
+        self.controller.active_identity=second
+        self.controller.log('第二个目标的记录')
+        app.tick()
+        self.assertIn('第二个目标的记录','\n'.join(app.logs))
+        self.assertNotIn('第一个目标','\n'.join(app.logs))
+        g.gtk_list_box_select_row(app.w['goals'],app.sidebar_rows[first][0])
+        self.assertIn('第一个目标的后台记录','\n'.join(app.logs))
+        self.assertEqual(app.snapshot,shot)
+        self.assertEqual(app.errors,[])
+
+    # ==========================================
     # Function: Delete a submitted goal through the sidebar while retaining its order in the native history window.
     # Method: Seed a real order, click both deletion actions and verify their separate persistent effects.
     # ==========================================
