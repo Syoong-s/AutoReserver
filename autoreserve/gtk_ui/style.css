@@ -17,6 +17,7 @@ button:focus { outline: 2px solid alpha(#3677ed,0.4); outline-offset: 1px; }
 button:disabled { color: #afb4be; background: #f3f4f6; }
 button.primary { background: #24262b; color: #fff; border-color: #24262b; font-weight: 600; }
 button.primary:hover { background: #41434a; }
+button.primary:disabled { background: #e6e9ee; border-color: #e6e9ee; color: #a3aab5; }
 button.secondary { background: #eceef2; border-color: transparent; }
 button.secondary:hover { background: #e3e6ec; }
 button.icon { padding: 4px 8px; min-width: 18px; background: transparent; border-color: transparent; color: #808793; }
@@ -64,6 +65,7 @@ button.choice:checked:hover { background: #dfebff; }
 .log-text, .log-text text { background: #fff; color: #768191; font-size: 11px; }
 .inventory-cell { font-size: 11px; color: #8a929e; padding: 4px 7px; }
 .inventory-cell.available { background: #eaf6ef; color: #28754e; border-radius: 5px; }
+.inventory-venue { background: #f7f9fc; border: 1px solid #dce4ef; border-radius: 8px; padding: 10px; }
 .error-banner { background: #fff1f0; color: #a13a37; border-radius: 8px; padding: 9px 12px; }
 .settings-body { background: #fff; padding: 22px; }
 separator { background: #e7eaf0; min-height: 1px; }

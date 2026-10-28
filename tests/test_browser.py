@@ -29,6 +29,14 @@ from demo.server import Handler
 # ==========================================
 class FastPacer(ReadPacer):
     # ==========================================
+    # Function: Keep full-round integration fixtures independent from production wall-clock cadence.
+    # Method: Enter a round immediately while dedicated clock tests verify real scheduling and backoff.
+    # ==========================================
+    def begin_cycle(self, page, stop, progress=None, wake=None):
+        self._in_cycle=True
+        self._cycle_start=self.clock()
+        return not stop()
+    # ==========================================
     # Function: Reserve a mock read without waiting for production intervals.
     # Method: Preserve access denial checks and response feedback in integration tests.
     # ==========================================
@@ -631,7 +639,7 @@ class BrowserTests(unittest.TestCase):
                                          progress=events.append)
             self.assertEqual(result["status"], "completed")
             self.assertEqual(len(attempts), 2)
-            self.assertTrue(any(e["monitor"]["cooling_down"] and "全局退避 30 秒" in e["message"] for e in events))
+            self.assertTrue(any(e["monitor"]["cooling_down"] and "当前任务退避 30 秒" in e["message"] for e in events))
             self.assertEqual(page.evaluate("submitClicks"), 1)
 
     # ==========================================

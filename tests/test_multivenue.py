@@ -303,10 +303,10 @@ class MultiVenueTests(unittest.TestCase):
             self.assertEqual(len(calls), 2)
 
     # ==========================================
-    # Function: Verify real pacing logic covers every venue switch, not only date refreshes.
-    # Method: Advance a virtual clock while pumping real browser events between budgeted reads.
+    # Function: Scan all venues within one configured cycle instead of waiting a full interval at each switch.
+    # Method: Advance virtual read leases and require bounded within-round spacing plus completion before the next cycle.
     # ==========================================
-    def test_global_minimum_spacing_includes_venue_switches(self):
+    def test_round_reads_do_not_multiply_monitoring_interval(self):
         from autoreserve.monitoring import ReadPacer
         from test_monitoring import FakeClock
         clock, stamps = FakeClock(), []
@@ -345,7 +345,8 @@ class MultiVenueTests(unittest.TestCase):
                 result = run_reservation(page, config, self.journal, self.root / "artifacts", True)
             self.assertEqual(result["status"], "completed")
             self.assertGreaterEqual(len(stamps), 3)
-            self.assertTrue(all(b-a >= config.poll_interval_seconds for a, b in zip(stamps, stamps[1:])))
+            self.assertTrue(all(b-a >= .25 for a,b in zip(stamps,stamps[1:])))
+            self.assertLess(max(stamps)-min(stamps),config.poll_interval_seconds)
 
     # ==========================================
     # Function: Keep waiting when a fallback venue's date is unopened rather than blocked.

@@ -88,7 +88,7 @@ def check_window(app):
 
 # ==========================================
 # Function: Exercise the portable runtime independently of tests, demo files or repository metadata.
-# Method: Verify isolated windows and loopback fixtures, including scoped target activity and fresh hash-routed venue navigation.
+# Method: Verify independent real browser workers, whole-round cadence, scoped native controls and concurrent journal safety.
 # ==========================================
 def self_test(root, test_source=None):
     root = Path(root)
@@ -145,6 +145,7 @@ def self_test(root, test_source=None):
         from test_catalog_browser import DirectoryBrowserTests
         from test_multivenue import MultiVenueTests
         from test_goal_actions import GoalActionTests
+        from test_independent_workers import IndependentWorkerTests,IndependentBrowserTests,CycleTimingTests
         cases_backend=unittest.defaultTestLoader.loadTestsFromTestCase(GoalActionTests)
         cases = [GtkWorkspaceTests(name) for name in (
             'test_settings_first_frame_has_native_close_only_header',
@@ -157,6 +158,9 @@ def self_test(root, test_source=None):
             'test_candidate_composer_preserves_drafts_on_dismiss',
             'test_font_size_persists_without_changing_booking')]
         cases.extend(GtkWorkspaceTests(name) for name in (
+            'test_multiple_workers_allow_new_goal_and_independent_stop',
+            'test_inventory_retains_all_venue_cards',
+            'test_close_after_running_task_preserves_unsaved_goal',
             'test_template_occurrences_panel_and_running_dot',
             'test_selected_toolbar_save_retains_unrelated_incomplete_draft',
             'test_toolbar_start_uses_captured_goal_identity',
@@ -181,7 +185,9 @@ def self_test(root, test_source=None):
             'test_first_login_recovers_slow_directory_response',
             'test_directory_timeout_preserves_captured_login',
             'test_browser_abort_error_retries_once'))
-        result = unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite([*cases,*cases_backend]))
+        independent=[unittest.defaultTestLoader.loadTestsFromTestCase(kind)
+                     for kind in (IndependentWorkerTests,IndependentBrowserTests,CycleTimingTests)]
+        result = unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite([*cases,*cases_backend,*independent]))
         if not result.wasSuccessful():
             raise RuntimeError('Windows 本地验证失败，请查看运行日志')
         tests_run = result.testsRun

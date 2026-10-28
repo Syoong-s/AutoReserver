@@ -1,6 +1,7 @@
 """Native client workers: cached metadata, homepage login, and explicit monitoring."""
 
 from dataclasses import asdict, replace
+from copy import copy
 from datetime import datetime
 import hashlib
 import json
@@ -34,12 +35,15 @@ def context_key(venue, sport):
 class DesktopController(Controller):
     # ==========================================
     # Function: Restore existing configuration, static catalog, and learned court names.
-    # Method: Keep construction offline and preserve legacy journal migration.
+    # Method: Restore shared account data offline and initialize independently owned goal workers.
     # ==========================================
     def __init__(self, config_path, auth_dir):
         self.events = queue.SimpleQueue()
         super().__init__(config_path, auth_dir)
         self.active_identity = None
+        self.runs = {}
+        self.goal_ids = set()
+        self._parent = None
         self.last_run_identity = None
         self.merge_workspace()
         journal = Journal(self.auth_dir / "journal.sqlite3")
@@ -130,12 +134,108 @@ class DesktopController(Controller):
 
     # ==========================================
     # Function: Append only new log entries to the desktop activity panel.
-    # Method: Reuse the bounded log buffer and queue the newest entry.
+    # Method: Attach a stable worker identity and retain a bounded aggregate without mixing worker state.
     # ==========================================
-    def log(self, message):
-        super().log(message)
-        self.logs[-1]['identity'] = self.active_identity
-        self.emit("log", self.logs[-1].copy())
+    def log(self, message, identity=None):
+        with self.lock:
+            super().log(message)
+            self.logs[-1]['identity'] = identity or self.active_identity
+            entry=self.logs[-1].copy()
+            if self._parent is not None:
+                self._parent.logs=[*self._parent.logs,entry][-200:]
+            self.emit("log",entry)
+
+    # ==========================================
+    # Function: Identify the specific goal or template that owns an active worker.
+    # Method: Read a stable worker snapshot, resolve template children and retain legacy whole-workspace ownership.
+    # ==========================================
+    def is_running(self, identity):
+        worker=self.runs.get(identity)
+        if worker is not None and worker.busy:
+            return True
+        workers=tuple(self.runs.values())
+        if any(worker.busy and identity in worker.goal_ids for worker in workers):
+            return True
+        return bool(not any(worker.busy for worker in workers) and self.busy and self.operation=='run'
+                    and (self.active_identity is None or identity==self.active_identity))
+
+    # ==========================================
+    # Function: Distinguish global authentication work from independent monitors.
+    # Method: Block shared login/catalog changes while allowing unrelated goal editing and startup.
+    # ==========================================
+    def maintenance_busy(self):
+        return self.busy and self.operation not in {'run','idle'}
+
+    # ==========================================
+    # Function: Expose the selected worker's own countdown and message.
+    # Method: Keep browser and thread ownership inside the worker while returning plain status values.
+    # ==========================================
+    def run_state(self, identity):
+        worker=self.runs.get(identity)
+        return {'message':worker.message,'monitor':dict(worker.monitor),'result':worker.result} if worker else {
+            'message':self.message,'monitor':dict(self.monitor),'result':self.result}
+
+    # ==========================================
+    # Function: Run one goal with a private stop event, Playwright instance and Chromium browser.
+    # Method: Copy immutable configuration ownership, share only guarded account data and aggregate completion by identity.
+    # ==========================================
+    def launch_goal(self, identity, config):
+        child=copy(self)
+        child._parent=self
+        child.active_identity=child.last_run_identity=identity
+        child.goal_ids={g.id for g in config.goals}
+        child.runtime_config=config
+        child.stop_event,child.capture_event=threading.Event(),threading.Event()
+        child.logs,child.live_goals=[],[]
+        child.monitor,child.snapshot,child.result={},None,None
+        child.busy,child.operation=True,'run'
+        self.runs[identity]=child
+        self.busy,self.operation,self.active_identity=True,'run',identity
+        self.last_run_identity=identity
+        self.stop_event=child.stop_event  # Compatibility for the single-worker control API.
+
+        # ==========================================
+        # Function: Release just this worker after success, cancellation or failure.
+        # Method: Keep all other workers running and publish a scoped finish event on the shared native queue.
+        # ==========================================
+        def execute(operation, current, day):
+            try:
+                child.work(operation,current,day)
+            finally:
+                with self.lock:
+                    child.busy,child.operation=False,'idle'
+                    active=[key for key,value in self.runs.items() if value.busy]
+                    self.busy,self.operation=bool(active),'run' if active else 'idle'
+                    self.active_identity=active[-1] if active else identity
+                    self.result=child.result
+                self.emit('states',self.state()['goals'])
+                self.emit('finished',{'identity':identity,'result':child.result})
+
+        child.worker=threading.Thread(target=execute,args=('run',config,None),daemon=True,
+                                      name='autoreserve-goal-'+identity)
+        self.worker=child.worker
+        self.emit('goal_started',identity)
+        name=config.repeat_rules[0].name if identity.startswith('rule:') else config.goals[0].name
+        child.log(f'已启动独立浏览器任务：{name}')
+        child.worker.start()
+
+    # ==========================================
+    # Function: Stop only the selected goal, or all workers when closing the application.
+    # Method: Signal private task events and preserve cancellation of shared login/catalog work after earlier tasks finish.
+    # ==========================================
+    def stop(self, identity=None):
+        if self._parent is not None:
+            return super().stop()
+        with self.lock:
+            if not any(worker.busy for worker in self.runs.values()):
+                return super().stop()
+            workers=[self.runs[identity]] if identity in self.runs else list(self.runs.values()) if identity is None else []
+            if not workers and not self.runs:
+                return super().stop()
+            for worker in workers:
+                if worker.busy:
+                    worker.stop_event.set()
+                    worker.log('正在停止当前目标；若已提交，将先等待本次结果')
 
     # ==========================================
     # Function: Save one goal or template without applying edits from any other working draft.
@@ -143,7 +243,7 @@ class DesktopController(Controller):
     # ==========================================
     def save_goal(self, data, identity, removed=()):
         with self.lock:
-            if self.busy:
+            if self.maintenance_busy() or self.is_running(identity) or any(self.is_running(key) for key in removed):
                 raise ValueError('请先停止当前操作，再保存目标')
             projection = config_from_dict(data)
             config = load_config(self.config_path)
@@ -168,14 +268,17 @@ class DesktopController(Controller):
                 config.goals = [replacement if g.id==replacement.id else g for g in config.goals]
                 if not any(g.id==replacement.id for g in config.goals):
                     config.goals.append(replacement)
-            self.save(asdict(config))
+            super().save(asdict(config),allow_busy=True,notify=False)
+            self.log('当前目标已保存，其他任务继续运行',identity=identity)
             self.live_goals = previous_live
             if remove:
                 clear_goal_files(self.config_path,self.auth_dir,remove,removed_keys)
+                for key in remove:
+                    self.runs.pop(key,None)
 
     # ==========================================
     # Function: Save explicit global execution settings without committing target drafts.
-    # Method: Retain all persisted goal/template collections and validate only the proposed shared preferences.
+    # Method: Save defaults for future starts while preserving every running task's frozen configuration and progress.
     # ==========================================
     def save_settings(self, data):
         with self.lock:
@@ -183,7 +286,8 @@ class DesktopController(Controller):
             proposed = dict(data)
             for key in ('goals','targets','repeat_rules'):
                 proposed[key] = previous[key]
-            self.save(proposed)
+            super().save(proposed,allow_busy=True,notify=False)
+            self.log('新任务默认执行参数已保存，运行中的任务保持原配置')
 
     # ==========================================
     # Function: Remove a target and all owned local progress while retaining every order record.
@@ -191,7 +295,7 @@ class DesktopController(Controller):
     # ==========================================
     def delete_goal(self, identity, related=()):
         with self.lock:
-            if self.busy:
+            if self.maintenance_busy() or self.is_running(identity) or any(self.is_running(key) for key in related):
                 raise ValueError('请先停止监测，再删除目标')
             config = load_config(self.config_path)
             removed = {identity,*related}
@@ -213,11 +317,13 @@ class DesktopController(Controller):
                 clear_goal_files(self.config_path,self.auth_dir,removed,removed_keys)
                 save_config(config,self.config_path)
             self.live_goals = [g for g in self.live_goals if g.get('id') not in removed]
-            self._completed_seen = {item for item in self._completed_seen if item[0] not in removed}
+            self._completed_seen.difference_update(item for item in list(self._completed_seen) if item[0] in removed)
+            for key in removed:
+                self.runs.pop(key,None)
             self.logs = [row for row in self.logs if row.get('identity') not in removed]
             if self.last_run_identity in removed:
                 self.snapshot,self.result,self.monitor = None,None,{}
-            self.log('目标已删除，关联状态已清理；订单保留在「历史订单」')
+            self.log('目标已删除，关联状态已清理；订单保留在「历史订单」',identity=identity)
             return removed
 
     # ==========================================
@@ -252,9 +358,21 @@ class DesktopController(Controller):
 
     # ==========================================
     # Function: Remember exact court labels learned during active monitoring.
-    # Method: Tag progress with its monitored goal and update cached court labels without metadata refreshes.
+    # Method: Aggregate worker states under the shared lock and emit snapshots with their fixed owner identity.
     # ==========================================
     def progress(self, event):
+        with self.lock:
+            self._progress(event)
+
+    # ==========================================
+    # Function: Merge one worker's progress without racing shared metadata and completion caches.
+    # Method: Run under the parent lock and emit immutable event ownership alongside all venue results.
+    # ==========================================
+    def _progress(self, event):
+        if self._parent is not None:
+            with self.lock:
+                incoming={g['id'] for g in event.get('goals',[])}
+                self._parent.live_goals=[g for g in self._parent.live_goals if g['id'] not in incoming]+event.get('goals',[])
         incoming = {g['id'] for g in event.get('goals',[])}
         combined = [g for g in self.live_goals if g['id'] not in incoming] + event.get('goals',[])
         super().progress(event | {'goals':combined} if 'goals' in event else event)
@@ -307,8 +425,10 @@ class DesktopController(Controller):
         if operation not in {"login", "catalog", "run"}:
             raise ValueError("客户端仅在启动监测后读取空位")
         with self.lock:
-            if self.busy:
+            if self.maintenance_busy() or (self.busy and (operation!='run' or goal_id is None or not self.runs)):
                 raise ValueError("已有操作正在进行")
+            if operation=='run' and goal_id is not None and self.is_running(goal_id):
+                raise ValueError('当前目标已经在监测，请勿重复启动')
             if operation == "catalog":
                 cached = self.cache.load()
                 if cached is not None:
@@ -352,6 +472,9 @@ class DesktopController(Controller):
                             raise ValueError(conflicts[0])
                 finally:
                     journal.close()
+            if operation=='run' and goal_id is not None:
+                self.launch_goal(goal_id,config)
+                return
             self.busy, self.operation, self.result = True, operation, None
             self.active_identity = goal_id if operation=='run' else None
             if operation=='run':
@@ -430,10 +553,11 @@ class DesktopController(Controller):
 
     # ==========================================
     # Function: Persist deterministic daily goals before attempting their bookings.
-    # Method: Save on the browser worker and publish the new local workspace.
+    # Method: Merge only the owning template under the shared config lock and retain independent goal workers.
     # ==========================================
     def persist_daily(self, config):
         with self.lock:
+            self.goal_ids={g.id for g in config.goals}
             if self.active_identity and self.active_identity.startswith('rule:'):
                 full = load_config(self.config_path)
                 rule_id = self.active_identity[5:]
@@ -477,7 +601,8 @@ class DesktopController(Controller):
                     journal=Journal(self.auth_dir/'journal.sqlite3')
                     self.result=run_reservation(page,current,journal,artifacts,True,self.progress,
                                                 self.stop_event.is_set,self.persist_daily,prepare_auth=client.authenticated)
-                    self.log(self.result['message'])
+                    if self.result['message']!=self.message:
+                        self.log(self.result['message'])
                     if not page.is_closed() and origin_of(page.url)==origin_of(HOME_URL):
                         save_session(context,page,self.auth_dir,origin_of(HOME_URL))
                     return
@@ -500,13 +625,15 @@ class DesktopController(Controller):
 
     # ==========================================
     # Function: Run authenticated browser work without touching native widgets.
-    # Method: Persist daily occurrences on this worker before monitoring their shared inventory.
+    # Method: Lock only this goal's worker folder while keeping its account journal shared for atomic slot claims.
     # ==========================================
     def work(self, operation, config, date=None):
         base = goal_directory(self.config_path,self.active_identity) if self.active_identity else self.config_path.parent/'artifacts'
         artifacts = base / datetime.now().strftime("native-%Y%m%d-%H%M%S-%f")
         try:
-            with account_lock(self.auth_dir):
+            lock_dir=(goal_directory(self.config_path,self.active_identity)/'worker'
+                      if self._parent is not None else self.auth_dir)
+            with account_lock(lock_dir):
                 if operation=='run':
                     self.monitor_with_recovery(config,artifacts)
                     return
@@ -546,8 +673,9 @@ class DesktopController(Controller):
             with self.lock:
                 self.busy, self.operation = False, "idle"
             try:
-                self.emit("states", self.state()["goals"])
+                self.emit("states", (self._parent or self).state()["goals"])
             except Exception as exc:
                 self.log(f"本地进度读取失败：{exc}")
             finally:
-                self.emit("finished", self.result)
+                if self._parent is None:
+                    self.emit("finished", self.result)

@@ -6,9 +6,12 @@ import os
 from pathlib import Path
 import re
 import sys
+import threading
 from urllib.parse import urlsplit
 
 from .state import private_json
+
+_SESSION_FILES_LOCK=threading.Lock()
 
 PAYMENT_PATTERN = re.compile(
     r"(?:/venue/personal/(?:orderImmediatelyPC|order/paid)(?:\?|$)|https://cwc2\.jdcw\.sjtu\.edu\.cn/payment/)"
@@ -55,7 +58,7 @@ def require_playwright():
 
 # ==========================================
 # Function: Open a fresh manual login or reuse saved authentication for monitoring.
-# Method: Skip all saved browser state for login; leave durable files untouched until capture.
+# Method: Restore consistent paired login files without holding their brief disk lock during browser API calls.
 # ==========================================
 @contextmanager
 def open_browser(config, auth_dir, login=False):
@@ -86,12 +89,14 @@ def open_browser(config, auth_dir, login=False):
             headless=False if login else config.headless, executable_path=executable, env=launch_env,
         )
         options = {"viewport": {"width": 1440, "height": 1050}, "locale": "zh-CN", "timezone_id": config.timezone}
-        if not login and state_path.exists():
-            options["storage_state"] = str(state_path)
+        with _SESSION_FILES_LOCK:
+            storage=json.loads(state_path.read_text(encoding='utf-8')) if not login and state_path.exists() else None
+            saved=json.loads(session_path.read_text(encoding='utf-8')) if not login and session_path.exists() else None
+        if storage is not None:
+            options["storage_state"] = storage
         context = browser.new_context(**options)
         try:
-            if not login and session_path.exists():
-                saved = json.loads(session_path.read_text(encoding="utf-8"))
+            if saved is not None:
                 script = """(() => {
                     const saved = SAVED;
                     if (location.origin === saved.origin) {
@@ -113,16 +118,19 @@ def open_browser(config, auth_dir, login=False):
 
 # ==========================================
 # Function: Save only the authorized site's session.
-# Method: Store Playwright state plus sessionStorage in private files.
+# Method: Collect browser state without shared locks, then serialize only the brief paired login-file writes.
 # ==========================================
 def save_session(context, page, auth_dir, allowed_origin):
     origin = page.evaluate("location.origin")
     if origin != allowed_origin:
         raise RuntimeError("当前仍在登录服务或其他网站，请回到预约页再保存")
-    private_json(Path(auth_dir) / "storage.json", context.storage_state(indexed_db=True))
-    private_json(Path(auth_dir) / "session.json", {
+    storage=context.storage_state(indexed_db=True)
+    session={
         "origin": origin, "values": page.evaluate("Object.fromEntries(Object.entries(sessionStorage))"),
-    })
+    }
+    with _SESSION_FILES_LOCK:
+        private_json(Path(auth_dir) / "storage.json",storage)
+        private_json(Path(auth_dir) / "session.json",session)
 
 
 # ==========================================

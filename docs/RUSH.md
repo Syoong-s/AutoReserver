@@ -1,4 +1,4 @@
-# Timed-release booking / 抢购模式 — v0.11.0
+# Timed-release booking / 抢购模式 — v0.16.0
 
 The native workbench contains three independently collapsible sections, in order: **重复功能设置**, **抢购功能设置**, **目标设定**. The top-right **抢购模式** switch belongs to the selected goal/template and stays visible when its sections are collapsed. Folding changes presentation only. Repeat templates retain their blue editor border; an enabled rush section has a distinct amber heading.
 
@@ -19,13 +19,13 @@ Default timeline relative to release `T`:
 | Before `T − 45s` | Wait without inventory reads for that goal; ordinary goals may continue. |
 | Preparation | Recheck the desktop worker's saved session, estimate same-origin time when enabled, open the highest-priority venue/project/date, then discard preparation stock. |
 | Final guard before `T` | Preserve the warmed page and defer ordinary reads; guard is bounded by 2–10 seconds according to the existing action timeout. |
-| `T` through `T + 1s` | Fresh native inventory reads at a target 250ms spacing; at most four serial read actions across the account in the first/rolling one-second window. |
+| `T` through `T + 1s` | Fresh native inventory reads at a target 250ms spacing; at most four serial read actions per task in the first/rolling one-second window. |
 | Next 8 seconds | Target 1000ms spacing. |
-| After acceleration | Return to ordinary global monitoring interval and jitter. |
+| After acceleration | Return to complete-round monitoring interval and jitter. |
 
-All goals and venues share one read limiter and one browser. There are no parallel per-goal request floods. A *read action* is a navigation or native date refresh; the website may produce several chained HTTP requests per action. The configured interval is a minimum scheduling target, not a promise of a particular HTTP request rate or completion latency. Native page loading and stability checks remain in place. Identical settled DOM results are reused only while their native-read revision remains unchanged, no relevant request is pending, and the venue/date/project still match. Selection and notice acceptance verify the current DOM and full order summary without repeating the inventory quiet window when only selected cells and summary have changed. New requests, navigation, loading overlays or stock changes require full settling again.
+Each goal/template owns an independent worker thread, Playwright instance, Chromium browser, stop event, frozen execution configuration and limiter. Different goals can run concurrently; venues inside a task share its limiter. A *read action* covers one venue/date navigation and its native refresh chain. In normal mode, all venue/date groups are scanned serially with short bounded spacing, then the task waits until the next full round. A 60-second interval belongs to the round, rather than every individual browser operation. Network loading, jitter and server backoff can extend a round. Native page loading and stability checks remain in place. Identical settled DOM results are reused only while their native-read revision remains unchanged, no relevant request is pending, and the venue/date/project still match. Selection and notice acceptance verify the current DOM and full order summary without repeating the inventory quiet window when only selected cells and summary have changed. New requests, navigation, loading overlays or stock changes require full settling again.
 
-Release boundaries can wake a pending ordinary 15-second budget wait. They cannot shorten server cooldowns. HTTP 429/503 triggers the existing shared exponential backoff and honors any longer Retry-After; HTTP 403 pauses monitoring. Verification challenges still require the existing user flow. A single validated order completes a goal; uncertain submission keeps its durable lock and never falls back to another candidate. No payment action is added.
+Release boundaries can wake that task's pending round wait. They cannot shorten its server cooldowns. HTTP 429/503 triggers per-task exponential backoff and honors any longer Retry-After; HTTP 403 pauses the affected task. Verification challenges still require the existing user flow. A single validated order completes a goal; uncertain submission keeps its durable lock and never falls back to another candidate. No payment action is added.
 
 Pre-release availability never authorizes selection. Release-time refresh is mandatory, including when stock was already available during preparation. An unopened booking date causes a release-time calendar reload and further paced reloads until the date appears, including dates published slightly after the release. These reloads use the same limiter and server backoff as all other reads. Accelerated matching can finish the highest-priority available rush goal without waiting to read every ordinary goal's venue; unresolved higher-priority alternatives still block choosing a lower-priority one.
 
@@ -58,7 +58,7 @@ Both `goals[]` and `repeat_rules[]` accept a nested `rush` value. Old configurat
 }
 ```
 
-Preparation is configurable from 5–600 seconds; first-second spacing 200–1000ms; follow-up spacing 1000–15000ms; follow-up duration 0–30 seconds; manual correction −5000 to +5000ms. The four-read shared quota remains effective even with 200ms configured spacing. Rush settings do not alter the durable goal/order key or slot-conflict protection. Configuration remains in the program folder's `config/`.
+Preparation is configurable from 5–600 seconds; first-second spacing 200–1000ms; follow-up spacing 1000–15000ms; follow-up duration 0–30 seconds; manual correction −5000 to +5000ms. The four-read quota inside a task remains effective even with 200ms configured spacing. Rush settings do not alter the durable goal/order key or slot-conflict protection. Configuration remains in the program folder's `config/`.
 
 ## Design references and verification
 
@@ -70,4 +70,4 @@ The implementation was written for this application's existing native-DOM adapte
 
 Run `./test.sh` with the existing Python 3.12+ / GTK 3.24+ / Playwright environment in a graphical Linux session. Local validation uses Python 3.14.4, GTK 3.24.52 and Playwright 1.64.1. No new dependency or global installation is needed for this feature. Build with `python3 tools/release.py --expected-tag v0.11.0`; launch with `./AutoReserve` from an extracted portable folder, or `./start-gui.sh` from a source checkout.
 
-Deterministic clock tests cover gates, shared quotas, Retry-After precedence, cache rejection, probe disposal, clock jumps, per-goal clock opt-out, weekly/midnight preparation and date copies. Real Chromium tests use only a loopback fixture and cover release-time selection, a disappearing prewarm vacancy, a first-second 429 and cancellation before release. Native GTK tests cover the three fold states, per-goal switch persistence, next-day/weekly conversion and countdown uncertainty. No real reservation or payment is used for verification.
+Deterministic clock tests cover gates, shared quotas, Retry-After precedence, cache rejection, probe disposal, clock jumps, per-goal clock opt-out, weekly/midnight preparation and date copies. Independent-browser regressions verify simultaneous starts, scoped stop, frozen defaults, task-local failure and atomic shared slot claims. Real Chromium tests use only a loopback fixture and cover release-time selection, a disappearing prewarm vacancy, a first-second 429 and cancellation before release. Native GTK tests cover the three fold states, per-goal switch persistence, next-day/weekly conversion and countdown uncertainty. No real reservation or payment is used for verification.

@@ -283,3 +283,13 @@ HTTP 401 或页面离开场馆站点会明确要求重新登录；403 停止监�
 - [首次运行依赖自举说明 (docs/FIRST_RUN.md)](docs/FIRST_RUN.md)
 - [Windows 平台原生支持与打包说明 (docs/WINDOWS.md)](docs/WINDOWS.md)
 - [抢购模式参数与时钟校准算法 (docs/RUSH.md)](docs/RUSH.md)
+
+## v0.16.0：独立任务与整轮监测
+
+原生工作台为每个目标或重复模板保存一个独立 worker。每个 worker 拥有自己的线程、Playwright 实例、Chromium 浏览器、停止事件、运行参数、日志、进度和结果；重复模板的日期实例仍归属于模板。各任务只共享受锁保护的配置修改、静态场地缓存、完成通知集合，以及统一的 SQLite 订单日志。浏览器 API、页面读取和会话快照采集不得持有工作台共享锁，避免一个慢浏览器阻塞其他任务。
+
+当前实现用 scoped controller view 复用已验证的 runner/recovery 路径，创建 view 时显式替换全部可变执行状态。任务注册表按目标 ID 管理；单任务停止只设置其自己的 event，程序退出则统一通知全部 worker。新任务的默认参数可在其他任务运行时保存，已经启动的配置保持冻结。配置、缓存和会话 JSON 使用独立临时文件原子替换；SQLite 在检查占位前使用 `BEGIN IMMEDIATE`，确保并发浏览器只有一个能取得同一时段的提交许可。
+
+普通多场馆监测以整轮为单位计算间隔。每轮依次读取去重后的场馆/日期组合，页面初始化与日期选择归为一次读取动作；场馆之间保持短串行间隔，下一轮按本轮起点加配置间隔和抖动安排。抢购阶段继续使用任务自身的首秒及后续加速窗口，服务器退避仍优先。日志记录轮次、逐场馆结果、汇总与下一次检查时间；瞬时加载和倒计时仅更新状态。`inventories` 进度字段携带全部场馆的结果、关注时段、轮次、检查时间和错误状态，GTK 同时保留各场馆卡片。
+
+本地回归使用 Python 3.14.4、GTK 3.24.52 和 Playwright 1.64.1；Windows 便携包使用固定的 Python 3.14.5、GTK 3.24.52 和 Playwright 1.64.1。没有新增运行时依赖。源代码启动保持 `./start-gui.sh`；发布包使用 Linux `./AutoReserve` 或 Windows `AutoReserve.exe`。本地构建命令为 `python3 tools/release.py --expected-tag v0.16.0` 和 `python3 tools/build_windows.py --expected-tag v0.16.0`。并发与整轮时序用例位于 `tests/test_independent_workers.py`；测试只使用隔离账户目录和本地模拟网页，不访问真实账户。

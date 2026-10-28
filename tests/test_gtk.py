@@ -28,6 +28,91 @@ from test_catalog import native_config,directory_fixture
 @unittest.skipUnless(os.environ.get('RUN_GTK_TESTS')=='1','设置 RUN_GTK_TESTS=1 启用 GTK 实机测试')
 class GtkWorkspaceTests(unittest.TestCase):
     # ==========================================
+    # Function: Preserve newly created unsaved goals when closing after independent monitors stop.
+    # Method: Request close during a run, finish that run and require the ordinary unsaved-changes dialog.
+    # ==========================================
+    def test_close_after_running_task_preserves_unsaved_goal(self):
+        app=self.app
+        first=app.model.selected
+        app.add_goal()
+        self.controller.busy,self.controller.operation,self.controller.active_identity=True,'run',first
+        app.request_close()
+        self.assertTrue(app.closing)
+        self.controller.busy,self.controller.operation=False,'idle'
+        app.tick()
+        self.assertFalse(app.destroyed)
+        self.assertIsNotNone(app.confirm_window)
+        self.assertFalse(app.closing)
+
+    # ==========================================
+    # Function: Start two independent goals, create another and stop only the selected browser worker.
+    # Method: Exercise real native buttons, saves, worker threads and scoped cancellation with offline browser stand-ins.
+    # ==========================================
+    def test_multiple_workers_allow_new_goal_and_independent_stop(self):
+        app,g=self.app,self.g
+        first=app.model.selected
+        private_json(self.path/'auth/session.json',{})
+
+        # ==========================================
+        # Function: Keep this test's browser worker alive until its private stop signal.
+        # Method: Replace only external page work while preserving production thread and file-lock ownership.
+        # ==========================================
+        def monitor(worker,config,artifacts):
+            worker.stop_event.wait(8)
+            worker.result={'status':'stopped','message':'当前目标已停止'}
+
+        try:
+            with patch.object(DesktopController,'monitor_with_recovery',monitor):
+                g.gtk_button_clicked(app.w['start'])
+                app.save_worker.join(2)
+                self.wait_layout(lambda:self.controller.is_running(first))
+                self.assertTrue(g.gtk_widget_get_sensitive(app.w['new_goal']))
+                app.copy_goal(first)
+                second=app.model.selected
+                self.assertTrue(g.gtk_widget_get_sensitive(app.w['start']))
+                self.assertTrue(g.gtk_widget_get_sensitive(app.name_entry))
+                g.gtk_button_clicked(app.w['start'])
+                app.save_worker.join(2)
+                self.wait_layout(lambda:self.controller.is_running(second))
+                self.assertTrue(self.controller.is_running(first))
+                g.gtk_list_box_select_row(app.w['goals'],app.sidebar_rows[first][0])
+                g.gtk_button_clicked(app.w['stop'])
+                self.controller.runs[first].worker.join(2)
+                self.pump(.1)
+                self.assertFalse(self.controller.is_running(first))
+                self.assertTrue(self.controller.is_running(second))
+                g.gtk_button_clicked(app.w['new_goal'])
+                self.assertEqual(len(app.model.items()),3)
+                self.assertTrue(g.gtk_widget_get_sensitive(app.name_entry))
+                self.assertEqual(app.errors,[])
+        finally:
+            self.controller.stop()
+            for worker in self.controller.runs.values():worker.worker.join(2)
+
+    # ==========================================
+    # Function: Keep both venue results visible when the second venue updates last.
+    # Method: Publish a complete round inventory and inspect separate native cards with their own titles and grids.
+    # ==========================================
+    def test_inventory_retains_all_venue_cards(self):
+        app,g=self.app,self.g
+        values=[]
+        for venue in ('北校区学生活动中心','学生中心'):
+            shot={'venue':venue,'sport':'健身房','active_date':app.model.day(),'columns':['场地1'],
+                  'times':['07:00','20:00','21:00'],'rows':[['unavailable'],['available'],['unavailable']]}
+            values.append({'venue':venue,'sport':'健身房','date':app.model.day(),'status':'checked','cycle':1,
+                           'checked_at':datetime.now().isoformat(),'slots':['20:00-21:00','21:00-22:00'],'snapshot':shot})
+        self.controller.progress({'message':'本轮全部场馆已检查','goals':[],
+                                  'snapshot':values[-1]['snapshot'],'inventories':values})
+        app.tick()
+        cards=g.children(app.w['inventory'])
+        self.assertEqual(len(cards),2)
+        self.assertIn('北校区',g.gtk_label_get_text(g.children(cards[0])[0]).decode())
+        self.assertIn('学生中心',g.gtk_label_get_text(g.children(cards[1])[0]).decode())
+        self.assertEqual(len(app.inventories),2)
+        self.assertEqual(app.snapshot['venue'],'学生中心')
+        self.assertEqual(app.errors,[])
+
+    # ==========================================
     # Function: Show generated executions below their template with deletion and a truthful running indicator.
     # Method: Use real GTK widgets and the persisted deletion worker while keeping independent execution unavailable.
     # ==========================================
@@ -462,8 +547,8 @@ class GtkWorkspaceTests(unittest.TestCase):
             app.open_settings()
             self.assertTrue(g.gtk_widget_get_sensitive(app.w['settings']))
             self.assertTrue(g.gtk_widget_get_sensitive(app.font_spin))
-            self.assertFalse(g.gtk_widget_get_sensitive(app.settings_fields['poll_interval_seconds']))
-            self.assertFalse(g.gtk_widget_get_sensitive(app.settings_save))
+            self.assertTrue(g.gtk_widget_get_sensitive(app.settings_fields['poll_interval_seconds']))
+            self.assertTrue(g.gtk_widget_get_sensitive(app.settings_save))
             g.gtk_spin_button_set_value(app.font_spin,15)
             self.assertEqual(app.font_size,15)
         finally:
@@ -477,18 +562,18 @@ class GtkWorkspaceTests(unittest.TestCase):
     # ==========================================
     def test_slow_save_keeps_native_loop_responsive(self):
         app,g=self.app,self.g
-        original=self.controller.save
+        original=self.controller.save_goal
         beats=[]
 
         # ==========================================
         # Function: Delay isolated disk persistence without blocking GTK.
         # Method: Sleep only on the existing asynchronous save thread.
         # ==========================================
-        def slow_save(data):
+        def slow_save(data,identity,removed=()):
             time.sleep(.2)
-            original(data)
+            original(data,identity,removed)
 
-        with patch.object(self.controller,'save',side_effect=slow_save):
+        with patch.object(self.controller,'save_goal',side_effect=slow_save):
             app.save()
             g.later(15,lambda:beats.append(True))
             self.pump(.08)

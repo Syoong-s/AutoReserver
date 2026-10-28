@@ -6,25 +6,41 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import tempfile
+import threading
+import time
 
 from .filelock import acquire, release
+
+_JSON_LOCKS=[threading.RLock() for _ in range(64)]
 
 
 # ==========================================
 # Function: Write private JSON state without partial replacement.
-# Method: Flush and fsync a mode-0600 temporary file before rename.
+# Method: Serialize writes per path, use unique staging files and retry transient Windows sharing violations.
 # ==========================================
 def private_json(path, data):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    fd = os.open(tmp, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as stream:
-        json.dump(data, stream, ensure_ascii=False, indent=2)
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.chmod(tmp, 0o600)
-    os.replace(tmp, path)
+    lock=_JSON_LOCKS[hash(os.path.normcase(str(path.absolute())))%len(_JSON_LOCKS)]
+    with lock:
+        fd,tmp=tempfile.mkstemp(prefix=path.name+'.',suffix='.tmp',dir=path.parent)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                json.dump(data, stream, ensure_ascii=False, indent=2)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.chmod(tmp, 0o600)
+            for attempt in range(7):
+                try:
+                    os.replace(tmp, path)
+                    break
+                except PermissionError as exc:
+                    if os.name!='nt' or getattr(exc,'winerror',None) not in {5,32,33} or attempt==6:
+                        raise
+                    time.sleep(min(.01*2**attempt,.1))
+        finally:
+            Path(tmp).unlink(missing_ok=True)
 
 
 # ==========================================
@@ -101,12 +117,13 @@ class Journal:
 
     # ==========================================
     # Function: Arm the submission latch before the final click.
-    # Method: Commit task and selected slot claims in one transaction.
+    # Method: Acquire SQLite's write reservation before checking claims so concurrent browsers cannot arm the same slot.
     # ==========================================
     def arm(self, config, target, task_key=None):
-        self.ensure_new(config, task_key)
         key = task_key or config.task_key()
-        with self.db:
+        try:
+            self.db.execute('BEGIN IMMEDIATE')
+            self.ensure_new(config, task_key)
             self.db.execute("INSERT INTO tasks VALUES (?, ?, ?, ?)", (
                 key, "submit_intent", json.dumps({
                     "date": target.date, "court": target.court, "slots": target.slots,
@@ -115,6 +132,10 @@ class Journal:
             ))
             for slot_key in config.slot_keys(target):
                 self.db.execute("INSERT INTO slots VALUES (?, ?)", (slot_key, key))
+            self.db.commit()
+        except BaseException:
+            self.db.rollback()
+            raise
 
     # ==========================================
     # Function: Persist a definitive or uncertain outcome.

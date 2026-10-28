@@ -74,7 +74,7 @@ class Controller:
 
     # ==========================================
     # Function: Receive progress without sharing a SQLite connection across threads.
-    # Method: Copy the runner's goal and availability snapshots under a lock.
+    # Method: Copy owned progress under a lock and keep transient loading/countdown events out of the activity log.
     # ==========================================
     def progress(self, event):
         with self.lock:
@@ -84,7 +84,10 @@ class Controller:
             if event.get("snapshot") is not None:
                 self.snapshot = event["snapshot"]
             if event.get("message") != self.message:
-                self.log(event["message"])
+                if event.get('log',True):
+                    self.log(event["message"])
+                else:
+                    self.message=event['message']
 
     # ==========================================
     # Function: Return configuration, login readiness, and per-goal progress.
@@ -119,11 +122,11 @@ class Controller:
 
     # ==========================================
     # Function: Save UI preferences without invalidating successful orders.
-    # Method: Reject edits to completed goal requirements; priority changes remain safe.
+    # Method: Protect recorded requirements and allow an internal scoped saver to preserve unrelated running workers.
     # ==========================================
-    def save(self, data):
+    def save(self, data, *, allow_busy=False, notify=True):
         with self.lock:
-            if self.busy:
+            if self.busy and not allow_busy:
                 raise ValueError("请先停止当前操作，再修改配置")
             config = config_from_dict(data)
             old = load_config(self.config_path)
@@ -145,9 +148,11 @@ class Controller:
             finally:
                 journal.close()
             save_config(config, self.config_path)
-            self.live_goals = []
-            self.monitor = {}
-            self.log("预约目标和优先级已保存")
+            if not allow_busy:
+                self.live_goals = []
+                self.monitor = {}
+            if notify:
+                self.log("预约目标和优先级已保存")
 
     # ==========================================
     # Function: Start one browser action without blocking HTTP requests.

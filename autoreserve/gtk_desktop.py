@@ -55,6 +55,7 @@ class GtkDesktop:
         self._occurrence_signature = None
         self.court_buttons, self.hour_buttons = {}, {}
         self.logs, self.snapshot = [], None
+        self.inventories=[]
         self.activity,self._activity_identity = {},None
         self.monitor_started, self._inventory_signature = False, None
         self.font_provider = None
@@ -543,7 +544,7 @@ class GtkDesktop:
         self.rush_offset=g.gtk_spin_button_new_with_range(-5000,5000,10)
         self.pack(clock_row,self.field('手动补偿 / ms（正数表示服务器快）',self.rush_offset))
         self.rush_status=self.pack(parent,self.label('开启后保存并开始监测，将按此目标时间准备。','caption',wrap=True))
-        self.pack(parent,self.label('首秒最多 4 次串行读取，账号内所有目标共享；随后恢复常规频率。校时有秒级误差，遇到限流仍会退避。','caption',wrap=True))
+        self.pack(parent,self.label('每个任务首秒最多 4 次串行读取，任务内的场馆共享；随后恢复整轮监测间隔。校时有秒级误差，遇到限流仍会退避。','caption',wrap=True))
         self.edit_controls.extend([self.rush_at,self.rush_sync,self.rush_offset])
         g.connect(self.rush_switch,'notify::active',lambda *_:self.guard(self.commit_rush),count=3)
         g.connect(self.rush_sync,'toggled',lambda *_:self.guard(self.commit_rush))
@@ -556,7 +557,7 @@ class GtkDesktop:
     # Method: Validate the full setting atomically and reveal its module when enabling the top switch.
     # ==========================================
     def commit_rush(self):
-        if self.loading or self.controller.busy or self.saving or not self.model.get():
+        if self.loading or self.controller.is_running(self.model.selected) or self.saving or not self.model.get():
             return
         self.editing()
         enabled=bool(self.g.gtk_switch_get_active(self.rush_switch))
@@ -589,8 +590,7 @@ class GtkDesktop:
     # ==========================================
     def render_rush(self):
         g=self.g
-        running=(self.controller.busy and self.controller.operation=='run'
-                 and (not self.controller.active_identity or self.controller.active_identity==self.model.selected))
+        running=self.controller.is_running(self.model.selected)
         enabled=bool((self.model.get() or {}).get('rush',{}).get('enabled'))
         g.style(self.rush_expander,'rush-enabled',enabled)
         caption='抢购功能设置 · 已开启' if enabled else '抢购功能设置'
@@ -626,7 +626,7 @@ class GtkDesktop:
         g=self.g
         actions={'new_goal':self.add_goal,'goal_up':lambda:self.move_goal(-1),'goal_down':lambda:self.move_goal(1),
                  'settings':self.open_settings,'history':self.open_history,'save':self.save,'start':lambda:self.save(operation='run'),
-                 'stop':self.controller.stop,'login':lambda:self.action('login'),'capture':self.controller.capture,
+                 'stop':lambda:self.controller.stop(self.model.selected),'login':lambda:self.action('login'),'capture':self.controller.capture,
                  'dismiss_error':lambda:g.gtk_widget_hide(self.w['error_bar'])}
         for name,callback in actions.items():
             g.connect(self.w[name],'clicked',lambda *_,fn=callback:self.guard(fn))
@@ -657,18 +657,18 @@ class GtkDesktop:
 
     # ==========================================
     # Function: Reject editor mutations while browser work or durable saves are active.
-    # Method: Use the same guard behind keyboard and pointer activation.
+    # Method: Protect only the edited target; creation and unrelated targets remain available during other workers.
     # ==========================================
-    def editing(self):
-        if self.controller.busy or self.saving:
-            raise ValueError('请先停止监测，再编辑预约目标')
+    def editing(self, identity=None, create=False):
+        if self.closing or self.saving or self.controller.maintenance_busy() or (not create and self.controller.is_running(identity or self.model.selected)):
+            raise ValueError('请先停止当前目标，再编辑该目标；其他目标可独立操作')
 
     # ==========================================
     # Function: Commit valid local entry changes without rereading disk.
     # Method: Keep recorded goals immutable and update only changed sidebar captions.
     # ==========================================
     def metadata_changed(self):
-        if self.loading or self.controller.busy or self.saving or not self.model.get():
+        if self.loading or self.controller.is_running(self.model.selected) or self.saving or not self.model.get():
             return
         self.guard(lambda:self.model.metadata(self.g.text(self.name_entry),self.g.text(self.date_entry)))
         self.render_sidebar()
@@ -678,7 +678,7 @@ class GtkDesktop:
     # Method: Validate time on activation/focus loss and retain at least one weekday.
     # ==========================================
     def commit_schedule(self):
-        if self.loading or not self.model.repeating() or self.controller.busy or self.saving:
+        if self.loading or not self.model.repeating() or self.controller.is_running(self.model.selected) or self.saving:
             return
         self.editing()
         days=[i for i,b in enumerate(self.week_buttons) if self.g.gtk_toggle_button_get_active(b)]
@@ -955,12 +955,11 @@ class GtkDesktop:
                 days=item['weekdays']
                 schedule='每天' if len(days)==7 else '周'+'、'.join('一二三四五六日'[d] for d in days)
                 at=item.get('rush',{}).get('at') if item.get('rush',{}).get('enabled') else item['at']
-                running=self.controller.busy and self.controller.operation=='run' and self.controller.active_identity==key
+                running=self.controller.is_running(key)
                 text=f"{schedule} {at} · {'运行中' if running else '待启动' if item['enabled'] else '已暂停'}"
             else:
                 status='检查中' if state.get('watch_state')=='checking' else '退避等待' if state.get('watch_state')=='backoff' else STATUS.get(state.get('status','pending'),'需处理')
-                active=(self.controller.busy and self.controller.operation=='run'
-                        and (not self.controller.active_identity or self.controller.active_identity==key))
+                active=self.controller.is_running(key)
                 if state.get('status','pending') in {'pending','rejected'} and not active:
                     status='待启动'
                 text=f"{self.model.day(key)} · {status}"
@@ -1014,7 +1013,7 @@ class GtkDesktop:
             details='；'.join(f'{venue} {court} {" / ".join(slots)}' for court,slots,venue in candidates)
             self.pack(info,self.label(details,'caption',wrap=True))
             button=self.pack(row,self.button('删除',lambda key=identity:self.delete_goal(key),'secondary'))
-            g.gtk_widget_set_sensitive(button,not (self.controller.busy or self.saving))
+            g.gtk_widget_set_sensitive(button,not (self.controller.is_running(identity) or self.saving))
             self.occurrence_delete_buttons[identity]=button
             self.pack(self.occurrence_list,row)
         if not rows:
@@ -1026,11 +1025,10 @@ class GtkDesktop:
     # Method: Keep blue template surfaces and show a right-hand green dot only while that template runs.
     # ==========================================
     def paint_status_rows(self):
-        running=self.controller.busy and self.controller.operation=='run'
         for key,item in self.model.items():
+            running=self.controller.is_running(key)
             if key in self.running_dots:
-                self.g.gtk_widget_set_visible(self.running_dots[key],bool(running and self.model.repeating(key)
-                    and (self.controller.active_identity is None or self.controller.active_identity==key)))
+                self.g.gtk_widget_set_visible(self.running_dots[key],bool(running and self.model.repeating(key)))
             status=self.model.states.get(key,{}).get('status','pending')
             if self.model.repeating(key):
                 tone='recurring' if item['enabled'] else 'paused'
@@ -1038,9 +1036,7 @@ class GtkDesktop:
                 tone='completed'
             elif status in {'unknown','needs_verification','conflict','expired'}:
                 tone='attention'
-            elif (running and (not self.controller.active_identity or key==self.controller.active_identity
-                  or item.get('repeat_id')==self.controller.active_identity.removeprefix('rule:'))
-                  and status in {'pending','preview','rejected'}):
+            elif running and status in {'pending','preview','rejected'}:
                 tone='running'
             elif item.get('repeat_id'):
                 tone='recurring'
@@ -1080,7 +1076,7 @@ class GtkDesktop:
     # Method: Protect recorded targets and apply weekly controls only for templates.
     # ==========================================
     def commit_current(self):
-        if self.loading or self.controller.busy or self.saving or not self.model.get():
+        if self.loading or self.controller.is_running(self.model.selected) or self.saving or not self.model.get():
             return
         if not self.model.repeating() and self.model.states.get(self.model.selected,{}).get('status','pending') not in {'pending','preview'}:
             return
@@ -1188,10 +1184,10 @@ class GtkDesktop:
 
     # ==========================================
     # Function: Create another independent one-time target.
-    # Method: Preserve the current editor before switching selection.
+    # Method: Preserve editable drafts without requiring another goal's browser to stop.
     # ==========================================
     def add_goal(self):
-        self.editing()
+        self.editing(create=True)
         self.commit_current()
         self.model.add()
         self.render_sidebar()
@@ -1199,10 +1195,10 @@ class GtkDesktop:
 
     # ==========================================
     # Function: Copy the clicked row's own next day.
-    # Method: Commit the active editor without selecting or rewriting the source first.
+    # Method: Copy frozen requirements into an independent goal while leaving any running source untouched.
     # ==========================================
     def copy_goal(self, identity):
-        self.editing()
+        self.editing(create=True)
         self.commit_current()
         self.model.copy_next(identity)
         self.render_sidebar()
@@ -1214,7 +1210,7 @@ class GtkDesktop:
     # Method: Clean its disk-owned state on a worker before removing its in-memory draft and sidebar row.
     # ==========================================
     def delete_goal(self, identity):
-        self.editing()
+        self.editing(identity)
         related = set(self.model.replacements.get(identity,()))
         self.saving=True
         self.set_busy()
@@ -1288,41 +1284,39 @@ class GtkDesktop:
     # ==========================================
     def set_busy(self):
         g=self.g
-        busy=self.controller.busy or self.saving
+        maintenance=self.controller.maintenance_busy()
+        current=self.controller.is_running(self.model.selected)
+        busy=maintenance or current or self.saving
+        any_busy=self.controller.busy
         recorded=not self.model.repeating() and self.model.states.get(self.model.selected,{}).get('status','pending') not in {'pending','preview'}
-        signature=(busy,self.controller.operation,self.controller.active_identity,self.model.selected,recorded,self._court_scope,len(self.sidebar_rows))
+        signature=(busy,any_busy,self.model.selected,recorded,self._court_scope,len(self.sidebar_rows),
+                   tuple((key,self.controller.is_running(key)) for key in self.sidebar_rows))
         if signature==self._busy:
             return
         self._busy=signature
         self.render_inventory(self.snapshot)
         editable=not busy and not recorded and self.model.get() is not None
-        for widget in self.edit_controls:
+        for widget in [*self.edit_controls,*self.court_buttons.values(),*self.hour_buttons.values(),self.name_entry]:
             g.gtk_widget_set_sensitive(widget,editable)
-        for button in [*self.court_buttons.values(),*self.hour_buttons.values()]:
-            g.gtk_widget_set_sensitive(button,editable)
-        g.gtk_widget_set_sensitive(self.name_entry,editable)
         g.gtk_widget_set_sensitive(self.date_entry,editable and not self.model.repeating())
-        for name in ['save','start','new_goal','login','goal_up','goal_down']:
-            g.gtk_widget_set_sensitive(self.w[name],not busy)
-        for name in ('save','start'):
+        for name in ('save','start','goal_up','goal_down'):
             g.gtk_widget_set_sensitive(self.w[name],not busy and self.model.get() is not None)
-        if self.history_window:
-            for button in self.history_delete_buttons:
-                g.gtk_widget_set_sensitive(button,not busy)
-        for button in self.occurrence_delete_buttons.values():
-            g.gtk_widget_set_sensitive(button,not busy)
+        g.gtk_widget_set_sensitive(self.w['new_goal'],not maintenance and not self.saving)
+        g.gtk_widget_set_sensitive(self.w['login'],not any_busy and not self.saving)
+        for button in self.history_delete_buttons if self.history_window else []:
+            g.gtk_widget_set_sensitive(button,not any_busy and not self.saving)
+        for identity,button in self.occurrence_delete_buttons.items():
+            g.gtk_widget_set_sensitive(button,not current and not self.controller.is_running(identity) and not maintenance and not self.saving)
         g.gtk_widget_set_sensitive(self.w['settings'],True)
         self.set_settings_busy()
         for key,(row,name,detail,plus,delete) in self.sidebar_rows.items():
-            g.gtk_widget_set_sensitive(plus,not busy)
-            g.gtk_widget_set_sensitive(delete,not busy)
-        g.gtk_widget_set_visible(self.w['capture'],self.controller.busy and self.controller.operation=='login')
-        g.gtk_widget_set_visible(self.w['stop'],self.controller.busy)
+            g.gtk_widget_set_sensitive(plus,not maintenance and not self.saving)
+            g.gtk_widget_set_sensitive(delete,not self.controller.is_running(key) and not maintenance and not self.saving)
+        g.gtk_widget_set_visible(self.w['capture'],maintenance and self.controller.operation=='login')
+        g.gtk_widget_set_visible(self.w['stop'],current)
         self.paint_status_rows()
-        monitoring=self.controller.busy and self.controller.operation=='run'
-        current=not self.controller.active_identity or self.controller.active_identity==self.model.selected
-        g.label(self.w['run_badge'],'保存中' if self.saving else '当前目标监测中' if monitoring and current else
-                '其他目标监测中' if monitoring else '登录中' if self.controller.busy else '待命')
+        g.label(self.w['run_badge'],'保存中' if self.saving else '当前目标监测中' if current else
+                '其他目标监测中' if any_busy and not maintenance else '登录中' if maintenance else '待命')
 
     # ==========================================
     # Function: Restore execution logs and availability belonging to the selected target.
@@ -1334,10 +1328,11 @@ class GtkDesktop:
             return
         if self._activity_identity is not None:
             self.activity[self._activity_identity]={'logs':list(self.logs),'snapshot':self.snapshot,
-                'started':self.monitor_started,'next_read_at':self.next_read_at}
+                'inventories':list(self.inventories),'started':self.monitor_started,'next_read_at':self.next_read_at}
         state=self.activity.get(identity,{})
         self._activity_identity=identity
         self.logs=list(state.get('logs',[]))
+        self.inventories=list(state.get('inventories',[]))
         self.monitor_started=state.get('started',False)
         self.next_read_at=state.get('next_read_at')
         self.render_logs()
@@ -1360,14 +1355,17 @@ class GtkDesktop:
     # Method: Require a selected target, reset only its activity and delegate its captured identity to the worker.
     # ==========================================
     def action(self, operation, identity=None):
+        if self.closing:
+            raise ValueError('正在退出，请等待所有任务结束')
         if operation=='run':
             identity=identity or self.model.selected
             if not identity or self.model.get(identity) is None:
                 raise ValueError('请先选择要监测的目标')
             self.controller.start(operation,goal_id=identity)
-            self.activity[identity]={'logs':[],'snapshot':None,'started':True,'next_read_at':None}
+            self.activity[identity]={'logs':[],'snapshot':None,'inventories':[],'started':True,'next_read_at':None}
             if identity==self.model.selected:
                 self.logs=[]
+                self.inventories=[]
                 self.render_logs()
         else:
             self.controller.start(operation)
@@ -1382,8 +1380,8 @@ class GtkDesktop:
     # Method: Reconcile native row selection before capturing a scoped projection and keep settings and exit saves separate.
     # ==========================================
     def save(self, operation=None, scope=None):
-        self.editing()
         scope=scope or ('all' if operation=='close' else 'goal')
+        self.editing(create=scope=='settings')
         if scope=='goal':
             row=self.g.gtk_list_box_get_selected_row(self.w['goals'])
             selected=next((key for key,widgets in self.sidebar_rows.items() if widgets[0]==row),None)
@@ -1587,8 +1585,8 @@ class GtkDesktop:
             lambda:self.set_font_size(g.gtk_spin_button_get_value_as_int(widget))))
         self.pack(display,self.button('恢复默认布局',self.reset_layout,'secondary'))
         self.pack(content,self.label('执行设置','section-title'))
-        self.pack(content,self.label('运行中可调整界面；修改预约参数前请先停止监测。','muted',wrap=True))
-        specs=[('普通目标启动时间 · 北京时间，留空立即','start_at'),('全局读取间隔 / 秒','poll_interval_seconds'),
+        self.pack(content,self.label('以下是新任务的默认参数；修改后仅在下次启动时生效，运行中的任务保持原配置。间隔按检查全部场馆的一整轮计算。','muted',wrap=True))
+        specs=[('普通目标启动时间 · 北京时间，留空立即','start_at'),('整轮监测间隔 / 秒','poll_interval_seconds'),
                ('预约网格加载等待 / 秒','grid_timeout_seconds'),
                ('额外随机延迟 / %','poll_jitter_ratio'),('异常退避上限 / 秒','backoff_max_seconds'),
                ('单个订单金额上限 / 元 · 0 为无上限','max_total_price'),('普通模式监测时长 / 秒 · 0 为无上限','max_poll_seconds')]
@@ -1622,21 +1620,21 @@ class GtkDesktop:
 
     # ==========================================
     # Function: Keep display settings accessible while reservation parameters are locked.
-    # Method: Toggle only booking fields and their save action, leaving global font and layout controls interactive.
+    # Method: Allow future-task defaults during monitoring while keeping authentication maintenance and disk saves serialized.
     # ==========================================
     def set_settings_busy(self):
         if self.settings_window:
-            editable=not self.controller.busy and not self.saving
+            editable=not self.controller.maintenance_busy() and not self.saving
             for widget in self.settings_fields.values():
                 self.g.gtk_widget_set_sensitive(widget,editable)
             self.g.gtk_widget_set_sensitive(self.settings_save,editable)
 
     # ==========================================
     # Function: Validate child-window settings before applying them to the shared workspace.
-    # Method: Parse typed values into a proposed config and save asynchronously.
+    # Method: Save future-task defaults asynchronously without editing or restarting an existing browser worker.
     # ==========================================
     def apply_settings(self):
-        self.editing()
+        self.editing(create=True)
         g=self.g
         data=dict(self.model.data)
         for key,widget in self.settings_fields.items():
@@ -1682,41 +1680,67 @@ class GtkDesktop:
         g.later(25,settle)
 
     # ==========================================
-    # Function: Keep live availability visible in its independently resizable native card.
-    # Method: Scope running hints to the selected target and repaint only changed in-memory snapshots.
+    # Function: Display all monitored venues with independent freshness and failure state.
+    # Method: Retain per-round cards and show requested hours compactly instead of overwriting the panel with the last venue.
     # ==========================================
     def render_inventory(self, shot):
-        running=(self.controller.busy and self.controller.operation=='run'
-                 and (not self.controller.active_identity or self.controller.active_identity==self.model.selected))
-        signature=(shot,running,self.monitor_started)
+        running=self.controller.is_running(self.model.selected)
+        signature=(shot,self.inventories,running,self.monitor_started)
         if signature==self._inventory_signature and self.g.children(self.w['inventory']):
             return
         self._inventory_signature=signature
         self.snapshot=shot
         g=self.g
         g.clear(self.w['inventory'])
-        if not shot:
-            g.label(self.w['inventory_scope'],'监测已启动 · 等待首次结果' if running else
-                    '本次尚未取得空位结果' if self.monitor_started else '尚未开始监测')
-            caption=('正在连接场馆并等待允许的读取时间，取得空位后会自动更新。' if running else
-                     '开始监测后显示最近一次空位结果\n编辑场馆和时段不会读取空位')
-            self.pack(self.w['inventory'],self.label(caption,'muted',wrap=True))
-        else:
+        if self.inventories:
+            g.label(self.w['inventory_scope'],f'{len(self.inventories)} 个场馆/日期 · 各场馆显示关注时段')
+            for item in self.inventories:
+                card=self.pack(self.w['inventory'],self.box(True,5,'inventory-venue'))
+                self.pack(card,self.label(f"{item['venue']} / {item['sport']}",'section-title',ellipsis=True))
+                checked=item.get('checked_at')
+                stamp=datetime.fromisoformat(checked).strftime('%H:%M:%S') if checked else '尚未取得结果'
+                status={'waiting':'等待本轮检查','loading':'本轮读取中','checked':'已检查',
+                        'error':'读取失败 · 保留上次结果','unopened':'日期尚未开放'}.get(item.get('status'),'等待')
+                self.pack(card,self.label(f"{item['date']} · 第 {item.get('cycle',0)} 轮 · {status} · {stamp}",'caption',wrap=True))
+                if item.get('snapshot'):
+                    self.inventory_grid(card,item['snapshot'],item.get('slots'))
+                elif item.get('message'):
+                    self.pack(card,self.label(item['message'],'muted',wrap=True))
+        elif shot:
             g.label(self.w['inventory_scope'],f"{shot.get('venue','')} / {shot.get('sport','')} / {shot.get('active_date','')}")
-            grid=g.gtk_grid_new()
-            g.gtk_grid_set_column_spacing(grid,5)
-            g.gtk_grid_set_row_spacing(grid,4)
-            for column,caption in enumerate(['时段',*shot.get('columns',[])]):
-                g.gtk_grid_attach(grid,self.label(caption,'inventory-cell'),column,0,1,1)
-            for row,(hour,cells) in enumerate(zip(shot.get('times',[]),shot.get('rows',[])),1):
-                g.gtk_grid_attach(grid,self.label(hour,'inventory-cell'),0,row,1,1)
-                for column,state in enumerate(cells,1):
-                    label=self.label({'available':'可预约','selected':'已选择'}.get(state,'—'),'inventory-cell')
-                    if state=='available':
-                        g.style(label,'available')
-                    g.gtk_grid_attach(grid,label,column,row,1,1)
-            self.pack(self.w['inventory'],grid)
+            self.inventory_grid(self.w['inventory'],shot)
+        else:
+            g.label(self.w['inventory_scope'],'当前目标监测中 · 等待首次结果' if running else
+                    '本次尚未取得空位结果' if self.monitor_started else '尚未开始监测')
+            self.pack(self.w['inventory'],self.label('正在连接场馆并等待读取结果。' if running else
+                '开始监测后显示当前目标的各场馆空位结果','muted',wrap=True))
         g.gtk_widget_show_all(self.w['inventory'])
+
+    # ==========================================
+    # Function: Render one venue's verified grid using its own column labels and snapshot.
+    # Method: Filter only displayed hours when a target slot list is available; keep the underlying snapshot complete.
+    # ==========================================
+    def inventory_grid(self, parent, shot, slots=None):
+        g=self.g
+        grid=g.gtk_grid_new()
+        g.gtk_grid_set_column_spacing(grid,5)
+        g.gtk_grid_set_row_spacing(grid,4)
+        for column,caption in enumerate(['时段',*shot.get('columns',[])]):
+            g.gtk_grid_attach(grid,self.label(caption,'inventory-cell'),column,0,1,1)
+        hours={slot[:5] for slot in slots} if slots else None
+        row=0
+        for hour,cells in zip(shot.get('times',[]),shot.get('rows',[])):
+            if hours is not None and hour[:5] not in hours:
+                continue
+            row+=1
+            caption=next((slot for slot in slots or [] if slot[:5]==hour[:5]),hour)
+            g.gtk_grid_attach(grid,self.label(caption,'inventory-cell'),0,row,1,1)
+            for column,state in enumerate(cells,1):
+                label=self.label({'available':'可预约','selected':'已选择'}.get(state,'—'),'inventory-cell')
+                if state=='available':
+                    g.style(label,'available')
+                g.gtk_grid_attach(grid,label,column,row,1,1)
+        self.pack(parent,grid)
 
     # ==========================================
     # Function: Notify confirmed orders without stopping other targets.
@@ -1733,8 +1757,9 @@ class GtkDesktop:
             window,body,header=self.child_window('预约成功',500,330)
             self.notice_window=window
             self.notice_label=self.pack(body,self.label('',wrap=True))
-            message=('订单已提交，未付款。当前重复模板继续按计划执行。' if (self.controller.active_identity or '').startswith('rule:')
-                     else '订单已提交，未付款。其他目标可在左栏分别选择启动。')
+            recurring=bool((self.model.get(item['id']) or {}).get('repeat_id'))
+            message=('订单已提交，未付款。该重复模板继续按计划执行。' if recurring
+                     else '订单已提交，未付款。其他运行中的目标继续独立监测。')
             self.pack(body,self.label(message,'caption',wrap=True))
             self.pack(body,self.button('知道了',lambda:g.gtk_widget_destroy(window),'primary'))
             g.connect(window,'destroy',lambda *_:self.notice_destroyed())
@@ -1787,11 +1812,14 @@ class GtkDesktop:
                     state.update(started=True,next_read_at=value.get('monitor',{}).get('next_read_at'))
                     if value.get('snapshot') is not None:
                         state['snapshot']=value['snapshot']
+                    if value.get('inventories') is not None:
+                        state['inventories']=value['inventories']
                     self.render_sidebar()
-            elif kind=='busy' and value=='run':
-                latest,latest_shot=None,None
-                if not self.controller.active_identity or self.controller.active_identity==self.model.selected:
+            elif kind=='goal_started' or (kind=='busy' and value=='run'):
+                if (value==self.model.selected if kind=='goal_started' else self.controller.is_running(self.model.selected)):
+                    latest,latest_shot=None,None
                     self.monitor_started=True
+                    self.inventories=[]
                     self.render_inventory(None)
             elif kind=='goal_completed':
                 self.show_completion(value)
@@ -1821,7 +1849,7 @@ class GtkDesktop:
                 if value['operation']=='close':
                     self.destroy()
                     return False
-                if value['operation']:
+                if value['operation'] and not self.closing:
                     self.guard(lambda:self.action(value['operation'],value.get('identity')))
             elif kind=='goal_deleted':
                 self.saving=False
@@ -1866,26 +1894,34 @@ class GtkDesktop:
                 if self.settings_window:
                     self.g.gtk_widget_set_sensitive(self.settings_save,True)
             elif kind=='finished':
-                self.next_read_at=None
+                if not isinstance(value,dict) or not value.get('identity') or value['identity']==self.model.selected:
+                    self.next_read_at=None
             if time.monotonic()>=until:
                 break
         if latest:
             self.model.states.update({s['id']:s for s in latest.get('goals',[])})
+            if latest.get('inventories') is not None:
+                self.inventories=latest['inventories']
             if latest_shot is not None:
                 self.render_inventory(latest_shot)
+            elif latest.get('inventories') is not None:
+                self.render_inventory(self.snapshot)
             self.next_read_at=latest.get('monitor',{}).get('next_read_at')
             self.render_sidebar()
         if logs:
             self.render_logs()
         self.set_busy()
         self.render_rush()
-        if (self.next_read_at and self.controller.busy
-                and (not self.controller.active_identity or self.controller.active_identity==self.model.selected)):
-            text=f'{self.controller.message} · 下次读取约 {max(0,int(self.next_read_at-time.time()))} 秒后'
+        if self.next_read_at and self.controller.is_running(self.model.selected):
+            text=f"{self.controller.run_state(self.model.selected)['message']} · 下次读取约 {max(0,int(self.next_read_at-time.time()))} 秒后"
             if text!=getattr(self,'_countdown',None):
                 self._countdown=text
                 self.g.label(self.w['status'],text)
         if self.closing and not self.controller.busy and not self.saving:
+            self.closing=False
+            if self.model.dirty:
+                self.confirm_close()
+                return True
             self.destroy()
             return False
         return not self.destroyed

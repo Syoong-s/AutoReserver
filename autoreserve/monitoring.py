@@ -59,13 +59,13 @@ def retry_after_seconds(value, wall_now):
 
 
 # ==========================================
-# Function: Pace every monitoring read across all goals and dates.
+# Function: Pace one task across its monitored venues and dates.
 # Method: Share one monotonic deadline, additive jitter, and exponential cooldown.
 # ==========================================
 class ReadPacer:
     # ==========================================
-    # Function: Initialize an account-wide monitoring budget.
-    # Method: Permit the first read immediately, then enforce configured spacing.
+    # Function: Initialize one task monitoring budget.
+    # Method: Track read leases and optional full-round scheduling independently from server cooldowns.
     # ==========================================
     def __init__(self, config, clock=None, wall=None, jitter=None):
         self.config = config
@@ -87,6 +87,51 @@ class ReadPacer:
         self.grid_failures = 0
         self.adaptive_level = self.healthy_cycles = 0
         self._server_feedback_read = None
+        self._in_cycle=False
+        self._cycle_start=None
+        self._next_cycle=self.clock()
+
+    # ==========================================
+    # Function: Begin one complete venue/date scan at the configured task interval.
+    # Method: Wait once between rounds, wake for rush deadlines and keep server cooldowns authoritative.
+    # ==========================================
+    def begin_cycle(self, page, stop, progress=None, wake=None):
+        reported=None
+        while not stop():
+            self.check_denial()
+            interval,_=self.cadence()
+            due=self._next_cycle
+            if self._rush_phase and self._cycle_start is not None:
+                due=min(due,self._cycle_start+interval)
+            due=max(due,self.cooldown_until)
+            remaining=due-self.clock()
+            if remaining<=0:
+                self._cycle_start=self.clock()
+                self._in_cycle=True
+                if not self._rush_phase:
+                    self.next_allowed=min(self.next_allowed,(self.last_read+.25) if self.last_read is not None else self.clock())
+                return True
+            if wake and wake():
+                return False
+            caption=(round(due,1),self.reason)
+            if progress and caption!=reported:
+                reported=caption
+                state=self.state() | {'next_read_at':self.wall()+remaining,'wait_seconds':round(remaining,1)}
+                progress(state)
+            page.wait_for_timeout(min(200,max(.001,remaining*1000)))
+        return False
+
+    # ==========================================
+    # Function: Schedule the next complete scan rather than delaying each venue separately.
+    # Method: Anchor cadence to the round start with configured jitter and retain accelerated release spacing.
+    # ==========================================
+    def end_cycle(self):
+        if not self._in_cycle:
+            return
+        self._in_cycle=False
+        interval,_=self.cadence()
+        jitter=0 if self._rush_phase else self.jitter(0,self.config.poll_jitter_ratio)
+        self._next_cycle=(self._cycle_start if self._cycle_start is not None else self.clock())+interval*(1+jitter)
 
     # ==========================================
     # Function: Share upcoming timed-release windows across every goal and venue.
@@ -97,7 +142,7 @@ class ReadPacer:
 
     # ==========================================
     # Function: Select a bounded serial cadence for the active release phase.
-    # Method: Prefer the earliest active release, cap first-second leases and preserve normal pacing afterward.
+    # Method: Keep a short serial spacing inside normal rounds, with full configured intervals between rounds.
     # ==========================================
     def cadence(self):
         now = self.clock()
@@ -106,6 +151,8 @@ class ReadPacer:
         if not active or self.adaptive_level:
             interval=min(self.config.poll_interval_seconds * 2**self.adaptive_level,
                          max(self.config.poll_interval_seconds,600))
+            if self._in_cycle:
+                interval=min(interval,.25)
             phase, wait_until = None, now
         else:
             key, start, rush = min(active, key=lambda item: item[1])
@@ -134,8 +181,10 @@ class ReadPacer:
     # ==========================================
     def state(self):
         interval, quota = self.cadence()
-        remaining = max(0.0, max(self.next_allowed, self.cooldown_until, quota) - self.clock())
+        cycle_due=self._next_cycle if not self._in_cycle and self._cycle_start is not None else self.clock()
+        remaining = max(0.0, max(self.next_allowed, self.cooldown_until, quota,cycle_due) - self.clock())
         return {"interval_seconds": interval,
+                "cycle_interval_seconds": self.config.poll_interval_seconds,
                 "jitter_ratio": self.config.poll_jitter_ratio,
                 "next_read_at": self.wall() + remaining, "wait_seconds": round(remaining, 1),
                 "cooling_down": self.cooldown_until > self.clock(),
@@ -193,7 +242,7 @@ class ReadPacer:
             retry_after=response.headers.get('retry-after')
             if self._server_feedback_read == self.reads:
                 self.cooldown_until=max(self.cooldown_until,self.clock()+retry_after_seconds(retry_after,self.wall()))
-                self.reason=f'网站返回 HTTP {response.status}；全局退避 {max(0,self.cooldown_until-self.clock()):.0f} 秒'
+                self.reason=f'网站返回 HTTP {response.status}；当前任务退避 {max(0,self.cooldown_until-self.clock()):.0f} 秒'
             else:
                 self._server_feedback_read=self.reads
                 self.defer(f"网站返回 HTTP {response.status}",retry_after,server=True)
@@ -213,7 +262,7 @@ class ReadPacer:
                         max(30.0, self.config.poll_interval_seconds) * 2 ** min(self.failures - 1, 12))
         delay = max(automatic, retry_after_seconds(retry_after, self.wall()))
         self.cooldown_until = max(self.cooldown_until, self.clock() + delay)
-        self.reason = f"{reason}；全局退避 {delay:.0f} 秒"
+        self.reason = f"{reason}；当前任务退避 {delay:.0f} 秒"
 
     # ==========================================
     # Function: Detect a stuck read cycle without treating HTTP throttling as a reason to rotate browsers.
@@ -256,4 +305,4 @@ class ReadPacer:
             self.adaptive_level=max(0,self.adaptive_level-1)
             self.healthy_cycles=0
         if self.clock() >= self.cooldown_until:
-            self.reason = (f'错误恢复观察中，全局读取间隔暂为 {self.cadence()[0]:g} 秒' if self.adaptive_level else '')
+            self.reason = (f'错误恢复观察中，当前任务轮询间隔暂为 {self.cadence()[0]:g} 秒' if self.adaptive_level else '')

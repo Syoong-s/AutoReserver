@@ -73,19 +73,22 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
     needs_load, selected_dirty, seed = True, False, None
     last_calendar = 0
     unopened_dates = set()
+    inventories={}
+    cycle_number=0
     deadline = config.monitor_deadline(time.monotonic())
 
     # ==========================================
     # Function: Publish independent goal progress without mutating UI objects.
-    # Method: Include lightweight copies and an optional confirmed completion event.
+    # Method: Include every venue/date result and its freshness alongside the legacy latest snapshot and completion event.
     # ==========================================
-    def publish(message, snapshot=None, completed=None):
+    def publish(message, snapshot=None, completed=None, *, log=True):
         if has_rush:
             for goal in config.goals:
                 if goal.id in states and goal.rush.enabled:
                     states[goal.id]['rush'] = timing.state(goal)
         if progress:
-            progress({"message": message, "goals": [dict(s) for s in states.values()],
+            progress({"message": message,"log":log,"goals": [dict(s) for s in states.values()],
+                      "inventories":[dict(value) for value in inventories.values()],"cycle":cycle_number,
                       "snapshot": snapshot, "monitor": pacer.state(), "completed_goal": completed})
 
     # ==========================================
@@ -124,7 +127,8 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
         nonlocal last_read_error
         last_read_error=None
         wake = {'wake': boundary} if has_rush and submit else {}
-        if not pacer.wait(page, stop, lambda info: publish(info["reason"] or "所有场馆共同监测，等待全局读取间隔"), **wake):
+        if not pacer.wait(page, stop, lambda info: publish(info["reason"] or "等待本轮读取许可")
+                          if info['wait_seconds']>1 else None, **wake):
             if not stop() and has_rush and boundary():
                 raise RushBoundary()
             raise InterruptedError("用户停止监测")
@@ -188,6 +192,21 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
         return site.loaded_snapshot(expected_date=day, expected_sport=effective.sport)
 
     # ==========================================
+    # Function: Read one venue/date as one paced action without paying a full monitoring interval for navigation and date selection.
+    # Method: Load the correct document when needed, then choose the date and wait for its native request chain.
+    # ==========================================
+    def read_group(context, day):
+        nonlocal needs_load
+        fresh=(current_context!=context or needs_load or (context,day) in unopened_dates
+               or time.monotonic()-last_calendar>=config.calendar_refresh_seconds)
+        if fresh:
+            shot=load(context)
+            needs_load=False
+            if shot.get('active_date')==day:
+                return shot
+        return date_read(day)
+
+    # ==========================================
     # Function: Choose the highest-priority unclaimed available alternative for a goal.
     # Method: Match each candidate only against its own context/date snapshot.
     # ==========================================
@@ -225,7 +244,7 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
         return finish("completed", "全部目标已有成功订单，无需重复预约")
     page.on("response", pacer.observe)
     try:
-        publish("所有目标与场馆已加入共享监测")
+        publish("当前任务已启动 · 将按整轮检查所有场馆")
         if submit and config.start_at and not has_rush:
             publish("等待设定的启动时间，尚未读取空位")
             wait_for_start(config, stop)
@@ -263,13 +282,8 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
                         timing.update(pending)
                         for goal in timing.preparing(pending):
                             context, day = target_context(config, goal.candidates[0]), goal.candidates[0].date
-                            if current_context != context or needs_load:
-                                warm = read(lambda context=context: load(context))
-                                needs_load = warm is None
-                            else:
-                                warm = site.loaded_snapshot(expected_sport=effective.sport)
-                            if warm is not None and warm.get('active_date') != day:
-                                warm = read(lambda day=day: date_read(day))
+                            warm=read(lambda context=context,day=day:read_group(context,day))
+                            needs_load=warm is None
                             if warm is not None:
                                 timing.prepared[goal.id] = {'date_open': not warm.get('date_not_open')}
                                 publish('优先场馆已预热，等待抢购时刻；尚未选择或提交')
@@ -301,57 +315,66 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
                         page.wait_for_timeout(250)
                         continue
                     return finish("needs_attention",attention_message(states))
+                if not pacer.begin_cycle(page,stop,lambda info:publish(
+                        f"等待下一轮 · 约 {info['wait_seconds']:g} 秒后检查全部场馆",log=False),
+                        **({'wake':boundary} if has_rush and submit else {})):
+                    if not stop() and has_rush and boundary():
+                        raise RushBoundary()
+                    raise InterruptedError('用户停止监测')
+                cycle_number+=1
                 groups = list(dict.fromkeys((target_context(config, t), t.date) for g in pending for t in g.candidates))
+                for context,day in groups:
+                    previous=inventories.get((context,day),{})
+                    inventories[(context,day)]={'venue':context[1],'sport':context[2],'date':day,
+                        'snapshot':previous.get('snapshot'),'checked_at':previous.get('checked_at'),
+                        'status':'waiting','message':'等待本轮检查','cycle':cycle_number,
+                        'slots':list(dict.fromkeys(slot for goal in pending for target in goal.candidates
+                            if (target_context(config,target),target.date)==(context,day) for slot in target.slots))}
+                publish(f'第 {cycle_number} 轮开始 · 检查 {len(groups)} 个日期/场馆组合')
                 snapshots, read_failed, rush_fast, batch_limited = {}, False, False, False
                 for context, day in groups:
                     if stop():
                         raise InterruptedError("用户停止监测")
-                    publish(f'正在读取 {context[1]} / {context[2]} / {day}')
-                    if (current_context != context or needs_load or (context, day) in unopened_dates
-                            or time.monotonic() - last_calendar >= config.calendar_refresh_seconds):
-                        seed = read(lambda context=context: load(context))
-                        needs_load = seed is None
-                        if seed is None:
-                            read_failed = True
-                            batch_limited=isinstance(last_read_error,ReadDeferred) and not isinstance(last_read_error,GridNotReady)
-                            if batch_limited:
-                                break
-                            publish(f'{context[1]} / {context[2]} / {day} 读取未完成，继续检查其他场馆')
-                            continue
-                    if seed is not None and seed.get("active_date") == day:
-                        shot, seed = seed, None
-                    else:
-                        shot = read(lambda day=day: date_read(day))
+                    item=inventories[(context,day)]
+                    item.update(status='loading',message='本轮读取中')
+                    publish(f'第 {cycle_number} 轮 · 正在读取 {context[1]} / {context[2]} / {day}',log=False)
+                    shot=read(lambda context=context,day=day:read_group(context,day))
                     if shot is None:
-                        needs_load, read_failed = not bool(page.locator('#apointmentDetails').count()), True
+                        needs_load,read_failed=True,True
+                        item.update(status='error',message=str(last_read_error or '读取未完成'))
                         batch_limited=isinstance(last_read_error,ReadDeferred) and not isinstance(last_read_error,GridNotReady)
+                        publish(f'{context[1]} / {context[2]} / {day} 读取未完成，'+
+                                ('等待退避后重试' if batch_limited else '继续检查其他场馆'))
                         if batch_limited:
                             break
-                        publish(f'{context[1]} / {context[2]} / {day} 读取未完成，继续检查其他场馆')
                         continue
-                    snapshots[(context, day)] = shot
+                    snapshots[(context,day)]=shot
+                    checked=datetime.now(ZoneInfo(config.timezone)).isoformat()
                     if shot.get('date_not_open'):
-                        unopened_dates.add((context, day))
+                        unopened_dates.add((context,day))
+                        item.update(status='unopened',snapshot=None,message='日期尚未开放，下轮重新加载日历',checked_at=checked)
                         publish(f'{day} 尚未开放，下轮将重新加载日历')
                     else:
-                        unopened_dates.discard((context, day))
-                    checked = datetime.now(ZoneInfo(config.timezone)).isoformat()
+                        unopened_dates.discard((context,day))
+                        item.update(status='checked',snapshot=shot,message='本轮已检查',checked_at=checked)
                     for goal in pending:
-                        if any((target_context(config, t), t.date) == (context, day) for t in goal.candidates):
-                            states[goal.id].update(last_checked_at=checked, watch_state="monitoring",
-                                                   check_count=states[goal.id]["check_count"] + 1)
-                    publish(f"已检查 {context[1]} / {context[2]} / {day}，相关目标共享结果",
-                            None if shot.get("date_not_open") else shot)
-                    rushed = [g for g in pending if g.rush.enabled]
-                    if submit and rushed and best(rushed[0], snapshots) is not None:
-                        rush_fast = True
+                        if any((target_context(config,t),t.date)==(context,day) for t in goal.candidates):
+                            states[goal.id].update(last_checked_at=checked,watch_state='monitoring',
+                                                   check_count=states[goal.id]['check_count']+1)
+                    publish(f"已检查 {context[1]} / {context[2]} / {day} · 第 {cycle_number} 轮",
+                            None if shot.get('date_not_open') else shot)
+                    rushed=[g for g in pending if g.rush.enabled]
+                    if submit and rushed and best(rushed[0],snapshots) is not None:
+                        rush_fast=True
                         break
+                if not snapshots or batch_limited:
+                    publish(f'本轮已检查 {len(snapshots)}/{len(groups)} 个日期/场馆组合，未取得完整结果 · 第 {cycle_number} 轮')
                 if snapshots and not batch_limited:
                     if not read_failed:
                         pacer.healthy()
                     ready = [(g, best(g, snapshots)) for g in pending if not rush_fast or g.rush.enabled]
                     ready = [(g, t) for g, t in ready if t is not None]
-                    publish(f"本轮已检查 {len(snapshots)} 个日期/场馆组合，发现 {len(ready)} 个可预约目标")
+                    publish(f"本轮已检查 {len(snapshots)} 个日期/场馆组合，发现 {len(ready)} 个可预约目标 · 第 {cycle_number} 轮 · 耗时 {pacer.clock()-pacer._cycle_start:.1f} 秒")
                     for goal, queued in ready:
                         attempted = set()
                         target = queued
@@ -413,8 +436,11 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
                 if not recurring and not config.monitor_until_complete and time.monotonic() >= deadline:
                     return finish("pending", "本轮监测到时，未完成目标已保留")
                 seed = None
-                publish("等待空位，继续检查全部未完成目标")
+                pacer.end_cycle()
+                next_check=datetime.fromtimestamp(pacer.state()['next_read_at'],ZoneInfo(config.timezone)).strftime('%H:%M:%S')
+                publish(f"等待空位，下一轮 {next_check} 检查全部场馆")
             except RushBoundary:
+                pacer.end_cycle()
                 preparing_now = False
                 seed = None
                 continue
@@ -424,6 +450,8 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
     except InterruptedError:
         return finish("stopped", "已停止监测，进度已保留")
     finally:
+        if pacer._in_cycle:
+            pacer.end_cycle()
         if site is not None:
             site.close()
         page.remove_listener("response", pacer.observe)
