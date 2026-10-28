@@ -88,7 +88,7 @@ def check_window(app):
 
 # ==========================================
 # Function: Exercise the portable runtime independently of tests, demo files or repository metadata.
-# Method: Use temporary empty goals, local HTML and owned GTK windows; optionally run deeper CI cases from source.
+# Method: Use isolated native windows and loopback fixtures, including template history, delayed date publication and submission latency.
 # ==========================================
 def self_test(root, test_source=None):
     root = Path(root)
@@ -157,6 +157,7 @@ def self_test(root, test_source=None):
             'test_candidate_composer_preserves_drafts_on_dismiss',
             'test_font_size_persists_without_changing_booking')]
         cases.extend(GtkWorkspaceTests(name) for name in (
+            'test_template_occurrences_panel_and_running_dot',
             'test_selected_toolbar_save_retains_unrelated_incomplete_draft',
             'test_toolbar_start_uses_captured_goal_identity',
             'test_completed_sidebar_delete_and_history_record_delete',
@@ -165,10 +166,13 @@ def self_test(root, test_source=None):
             'test_native_dividers_resize_all_workspace_panels',
             'test_layout_preferences_restore_and_keep_font'))
         cases.extend([BrowserTests('test_submit_stops_before_payment'),
+                      BrowserTests('test_order_hot_path_avoids_repeated_settling'),
+                      BrowserTests('test_selection_fast_path_waits_for_native_recheck'),
                       BrowserTests('test_history_delete_allows_new_goal_for_identical_slot'),
                       BrowserTests('test_zero_duration_and_price_allow_unlimited_preview'),
                       MultiVenueTests('test_zero_duration_continues_until_stopped'),
-                      RushBrowserTests('test_release_gates_selection_and_discards_prewarm_stock')])
+                      RushBrowserTests('test_release_gates_selection_and_discards_prewarm_stock'),
+                      RushBrowserTests('test_unopened_seventh_day_reloads_until_published')])
         cases.extend(DirectoryBrowserTests(name) for name in (
             'test_first_login_recovers_slow_directory_response',
             'test_directory_timeout_preserves_captured_login',

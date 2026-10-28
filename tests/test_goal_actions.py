@@ -25,6 +25,35 @@ from test_catalog import native_config
 # ==========================================
 class GoalActionTests(unittest.TestCase):
     # ==========================================
+    # Function: Keep recurring occurrences owned by their template and reject independent execution or editing.
+    # Method: Exercise actual sidebar projection, durable controller guards and history deletion without a browser.
+    # ==========================================
+    def test_generated_goals_hidden_frozen_and_removable(self):
+        rule=RepeatRule('weekly','每周预约',self.config.goals[0].candidates)
+        occurrence=replace(self.config.goals[0],id='daily-weekly-2026-10-28',repeat_id=rule.id)
+        self.config.repeat_rules=[rule]
+        self.config.goals.insert(1,occurrence)
+        save_config(self.config,self.controller.config_path)
+        model=Workspace(self.config)
+        self.assertEqual([key for key,_ in model.items()],[self.config.goals[0].id,'second','rule:weekly'])
+        self.assertEqual(model.occurrences('rule:weekly')[0]['id'],occurrence.id)
+        with self.assertRaisesRegex(ValueError,'模板'):
+            model.editable(occurrence.id)
+        with self.assertRaisesRegex(ValueError,'模板'):
+            self.controller.start('run',goal_id=occurrence.id)
+        with self.assertRaisesRegex(ValueError,'模板'):
+            self.controller.save_goal(model.payload(occurrence.id),occurrence.id)
+        model.move(1)
+        self.assertEqual([key for key,_ in model.items()],['second',self.config.goals[0].id,'rule:weekly'])
+        self.order(occurrence)
+        model.selected='rule:weekly'
+        self.controller.delete_goal(occurrence.id)
+        model.remove(occurrence.id)
+        self.assertEqual(model.selected,'rule:weekly')
+        self.assertEqual(model.occurrences(),[])
+        self.assertEqual(len(self.controller.order_history()),1)
+
+    # ==========================================
     # Function: Prepare two independent pending targets in a real controller workspace.
     # Method: Use a future local booking date and exact courts so duplicate protection is deterministic.
     # ==========================================

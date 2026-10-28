@@ -1,6 +1,7 @@
 """Real release gating and stale-stock regressions against a loopback-only booking site."""
 
 from datetime import datetime, timedelta
+from dataclasses import replace
 import os
 from pathlib import Path
 import time
@@ -26,6 +27,41 @@ class RushBrowserTests(unittest.TestCase):
     setUp = fixtures.BrowserTests.setUp
     tearDown = fixtures.BrowserTests.tearDown
     browser = fixtures.BrowserTests.browser
+
+    # ==========================================
+    # Function: Discover a seventh-day tab published after the first release-time calendar refresh.
+    # Method: Serve date tabs based on wall time and require fresh navigations, one order and no pre-release selection.
+    # ==========================================
+    def test_unopened_seventh_day_reloads_until_published(self):
+        goal,release=self.timed_goal()
+        target=replace(self.target,date=(datetime.now(ZoneInfo('Asia/Shanghai')).date()+timedelta(days=7)).isoformat())
+        goal=replace(goal,candidates=[target])
+        opens=release+1.0
+        document=(Path(__file__).resolve().parents[1]/'demo/index.html').read_text()
+        document=document.replace('Array.from({length: 7}',f'Array.from({{length: (Date.now() >= {opens*1000:.3f} ? 8 : 7)}}')
+        navigations,submits,events=[],[],[]
+
+        # ==========================================
+        # Function: Publish the future date only when the browser requests a calendar after its opening.
+        # Method: Re-evaluate the document clock on each navigation rather than mutating the prewarmed page.
+        # ==========================================
+        def calendar(route):
+            navigations.append(time.time())
+            route.fulfill(content_type='text/html',body=document)
+
+        with self.browser(goals=[goal],targets=[],max_poll_seconds=12) as (config,_,page),patch('autoreserve.runner.ReadPacer',ReadPacer):
+            page.route(self.base+'/?scenario=success',calendar)
+            page.on('request',lambda request:submits.append(time.time()) if request.url.endswith('/ConfirmOrder') else None)
+            result=run_reservation(page,config,self.journal,self.root/'artifacts',True,events.append,
+                                   stop=lambda:time.time()>release+15)
+            self.assertEqual(result['status'],'completed')
+            self.assertGreaterEqual(len(navigations),3)
+            self.assertTrue(any(release<=at<opens for at in navigations))
+            self.assertTrue(any(at>=opens for at in navigations))
+            self.assertEqual(len(submits),1)
+            self.assertGreaterEqual(submits[0],opens)
+            self.assertTrue(any('尚未开放' in event['message'] for event in events))
+            self.assertEqual(page.evaluate('payClicks'),0)
 
     # ==========================================
     # Function: Create a near-future ordinary goal whose available stock is already visible before release.

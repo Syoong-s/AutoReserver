@@ -24,7 +24,7 @@ def target_context(config, target):
 
 # ==========================================
 # Function: Monitor all dates and alternative venues before choosing one order per goal.
-# Method: Share snapshots by context/date and serialize every read through one pacer.
+# Method: Share scoped snapshots, refresh calendars while dates are unopened and serialize every read through one pacer.
 # ==========================================
 def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pacer, refresh=None, prepare_auth=None):
     stop = stop or (lambda: False)
@@ -70,6 +70,7 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
     current_context, site, effective = None, None, None
     needs_load, selected_dirty, seed = True, False, None
     last_calendar = 0
+    unopened_dates = set()
     deadline = config.monitor_deadline(time.monotonic())
 
     # ==========================================
@@ -300,7 +301,8 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
                 for context, day in groups:
                     if stop():
                         raise InterruptedError("用户停止监测")
-                    if current_context != context or needs_load or time.monotonic() - last_calendar >= config.calendar_refresh_seconds:
+                    if (current_context != context or needs_load or (context, day) in unopened_dates
+                            or time.monotonic() - last_calendar >= config.calendar_refresh_seconds):
                         seed = read(lambda context=context: load(context))
                         needs_load = seed is None
                         if seed is None:
@@ -314,6 +316,11 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
                         needs_load, read_failed = not bool(page.locator('#apointmentDetails').count()), True
                         break
                     snapshots[(context, day)] = shot
+                    if shot.get('date_not_open'):
+                        unopened_dates.add((context, day))
+                        publish(f'{day} 尚未开放，下轮将重新加载日历')
+                    else:
+                        unopened_dates.discard((context, day))
                     checked = datetime.now(ZoneInfo(config.timezone)).isoformat()
                     for goal in pending:
                         if any((target_context(config, t), t.date) == (context, day) for t in goal.candidates):

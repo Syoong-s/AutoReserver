@@ -87,6 +87,7 @@ paned > separator.wide:active { background: #7da2dd; }
 .goal-list row.attention:selected { background: #ffe6c2; border-color: #e8b66f; border-left-color: #cf8528; }
 .goal-list row:selected, .goal-list row:selected .caption { color: #34435a; }
 .legend-running { color: #238658; font-size: 10px; }
+.goal-list .running-dot { color: #20a464; font-size: 12px; padding: 0 2px; }
 .legend-recurring { color: #3476ec; font-size: 10px; }
 .legend-planned { color: #8593aa; font-size: 10px; }
 .workbench-section { border-top: 1px solid #e8ebf0; padding-top: 0; }

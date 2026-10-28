@@ -35,7 +35,7 @@ STATUS = {'pending':'等待空位','submitted':'已下单','preview':'已预览'
 class GtkDesktop:
     # ==========================================
     # Function: Build an offline workspace with real GTK scroll containers and CSD windows.
-    # Method: Load GtkBuilder/CSS before mapping and keep browser execution behind explicit actions.
+    # Method: Load native views before mapping and retain template-owned occurrence history separately from sidebar controls.
     # ==========================================
     def __init__(self, controller, native=None, application=None, auto_catalog=True):
         self.g = native or GtkNative()
@@ -51,6 +51,8 @@ class GtkDesktop:
         self.history_generation,self.history_page = 0,0
         self.settings_fields, self.notices, self.errors = {}, {}, []
         self.edit_controls, self.sidebar_rows = [], {}
+        self.running_dots,self.occurrence_delete_buttons = {},{}
+        self._occurrence_signature = None
         self.court_buttons, self.hour_buttons = {}, {}
         self.logs, self.snapshot = [], None
         self.monitor_started, self._inventory_signature = False, None
@@ -205,7 +207,7 @@ class GtkDesktop:
 
     # ==========================================
     # Function: Build persistent editing controls independent of goal selection.
-    # Method: Update their values on navigation and rebuild only explicitly changed candidate/choice lists.
+    # Method: Retain editing widgets and add a read-only execution-history expander beneath target settings.
     # ==========================================
     def build_editor(self):
         g,card=self.g,self.w['editor']
@@ -223,6 +225,7 @@ class GtkDesktop:
         self.pack(repeat_body,self.label('选定每周执行日；开启抢购后将提前生成并准备。','caption',wrap=True))
         self.rush_expander,rush_body=self.section(self.automation_body,'抢购功能设置','rush',False)
         self.build_rush(rush_body)
+        editor_card=card
         self.target_expander,card=self.section(card,'目标设定','target',True)
         meta=self.box(spacing=14)
         self.pack(card,meta)
@@ -277,6 +280,10 @@ class GtkDesktop:
         g.style(self.candidate_list,'candidate-list')
         self.pack(card,self.label('从上到下依次尝试，任意一个下单即完成当前目标。','caption'))
         self.candidate_scroll=self.pack(card,self.scroller(self.candidate_list,248))
+        self.occurrence_expander,self.occurrence_body=self.section(editor_card,'重复执行目标 · 0','occurrences',False)
+        g.gtk_widget_set_no_show_all(self.occurrence_expander,True)
+        self.pack(self.occurrence_body,self.label('执行目标由模板自动管理；修改模板只影响之后创建的目标。删除历史目标会保留订单记录。','caption',wrap=True))
+        self.occurrence_list=self.pack(self.occurrence_body,self.box(True,8))
         self.builder_popover=g.gtk_popover_new(self.add_button)
         g.gtk_popover_set_position(self.builder_popover,3)
         g.gtk_popover_set_transitions_enabled(self.builder_popover,False)
@@ -900,7 +907,7 @@ class GtkDesktop:
 
     # ==========================================
     # Function: Update sidebar rows without resetting scroll position on status events.
-    # Method: Reuse existing GTK rows; rebuild only after an explicit membership/order change.
+    # Method: Keep generated executions inside their template and reuse sidebar rows and running indicators.
     # ==========================================
     def render_sidebar(self):
         g=self.g
@@ -912,6 +919,7 @@ class GtkDesktop:
             position=g.gtk_adjustment_get_value(adjustment)
             g.clear(self.w['goals'])
             self.sidebar_rows={}
+            self.running_dots={}
             self._sidebar_captions,self._row_tones={},{}
             for key,item in items:
                 row=g.gtk_list_box_row_new()
@@ -920,6 +928,10 @@ class GtkDesktop:
                 name=self.pack(caption,self.label('', 'goal-name',ellipsis=True))
                 detail=self.pack(caption,self.label('', 'caption',ellipsis=True))
                 self.pack(box,caption,True)
+                dot=self.pack(box,self.label('●','running-dot'))
+                g.gtk_widget_set_no_show_all(dot,True)
+                g.gtk_widget_set_tooltip_text(dot,'重复模板正在运行'.encode())
+                self.running_dots[key]=dot
                 plus=self.pack(box,self.button('+',lambda identity=key:self.copy_goal(identity),'icon'))
                 delete=self.pack(box,self.button('×',lambda identity=key:self.delete_goal(identity),'icon'))
                 g.gtk_widget_set_tooltip_text(plus,'复制为该目标下一天的独立目标'.encode())
@@ -940,7 +952,8 @@ class GtkDesktop:
                 days=item['weekdays']
                 schedule='每天' if len(days)==7 else '周'+'、'.join('一二三四五六日'[d] for d in days)
                 at=item.get('rush',{}).get('at') if item.get('rush',{}).get('enabled') else item['at']
-                text=f"{schedule} {at} · {'重复' if item['enabled'] else '已暂停'}"
+                running=self.controller.busy and self.controller.operation=='run' and self.controller.active_identity==key
+                text=f"{schedule} {at} · {'运行中' if running else '待启动' if item['enabled'] else '已暂停'}"
             else:
                 status='检查中' if state.get('watch_state')=='checking' else '退避等待' if state.get('watch_state')=='backoff' else STATUS.get(state.get('status','pending'),'需处理')
                 if status=='等待空位' and not (self.controller.busy and self.controller.operation=='run'):
@@ -958,15 +971,61 @@ class GtkDesktop:
         g.label(self.w['summary'],f'{len(items)} 个目标 · {done} 个已完成 · {rules} 个重复预约已开启')
         g.label(self.w['goal_count'],f'预约目标  {len(items)}')
         self.paint_status_rows()
+        self.render_occurrences()
         self.set_busy()
 
     # ==========================================
+    # Function: Show a template's generated executions without independent editing or start controls.
+    # Method: Cache read-only dated rows, explicitly map expander contents and preserve orders during deletion.
+    # ==========================================
+    def render_occurrences(self):
+        g=self.g
+        repeating=self.model.repeating() and self.model.get() is not None
+        g.gtk_widget_set_visible(self.occurrence_expander,repeating)
+        goals=self.model.occurrences() if repeating else []
+        today=self.model.today().isoformat()
+        rows=[]
+        for goal in goals:
+            state=self.model.states.get(goal['id'],{})
+            day=goal['candidates'][0]['date']
+            status=state.get('status','pending')
+            if day<today and status in {'pending','preview','rejected'}:
+                status='expired'
+            caption=STATUS.get(status,'需处理')
+            rows.append((goal['id'],goal['name'],day,caption,
+                         tuple((c['court'],tuple(c['slots']),(c.get('context') or {}).get('venue','')) for c in goal['candidates'])))
+        signature=(self.model.selected,tuple(rows))
+        if signature==self._occurrence_signature:
+            return
+        self._occurrence_signature=signature
+        self.occurrence_delete_buttons={}
+        self._busy=None
+        g.clear(self.occurrence_list)
+        g.gtk_expander_set_label(self.occurrence_expander,f'重复执行目标 · {len(goals)}'.encode())
+        for identity,name,day,status,candidates in rows:
+            row=self.box(spacing=10,css='history-row')
+            info=self.pack(row,self.box(True,5),True)
+            self.pack(info,self.label(f'{day} · {status}',ellipsis=True))
+            details='；'.join(f'{venue} {court} {" / ".join(slots)}' for court,slots,venue in candidates)
+            self.pack(info,self.label(details,'caption',wrap=True))
+            button=self.pack(row,self.button('删除',lambda key=identity:self.delete_goal(key),'secondary'))
+            g.gtk_widget_set_sensitive(button,not (self.controller.busy or self.saving))
+            self.occurrence_delete_buttons[identity]=button
+            self.pack(self.occurrence_list,row)
+        if not rows:
+            self.pack(self.occurrence_list,self.label('尚未生成执行目标；启动模板后会按计划自动创建。','muted',wrap=True))
+        g.gtk_widget_show_all(self.occurrence_body)
+
+    # ==========================================
     # Function: Distinguish running, recurring, planned, completed and attention-needed goals visibly.
-    # Method: Apply cached native CSS classes with tinted surfaces and persistent colored left accents.
+    # Method: Keep blue template surfaces and show a right-hand green dot only while that template runs.
     # ==========================================
     def paint_status_rows(self):
         running=self.controller.busy and self.controller.operation=='run'
         for key,item in self.model.items():
+            if key in self.running_dots:
+                self.g.gtk_widget_set_visible(self.running_dots[key],bool(running and self.model.repeating(key)
+                    and (self.controller.active_identity is None or self.controller.active_identity==key)))
             status=self.model.states.get(key,{}).get('status','pending')
             if self.model.repeating(key):
                 tone='recurring' if item['enabled'] else 'paused'
@@ -1027,7 +1086,7 @@ class GtkDesktop:
 
     # ==========================================
     # Function: Load a selected goal into retained editor controls.
-    # Method: Change values under a signal guard and preserve all other targets/drafts.
+    # Method: Restore target controls and independent history folds under a signal guard.
     # ==========================================
     def load_editor(self):
         g=self.g
@@ -1060,12 +1119,14 @@ class GtkDesktop:
         for key,widget,default in [('repeat',self.repeat_expander,repeating),('rush',self.rush_expander,rush['enabled']),
                                    ('automation',self.automation_expander,repeating or rush['enabled']),
                                    ('target',self.target_expander,True),('builder-venue',self.venue_expander,True),
+                                   ('occurrences',self.occurrence_expander,False),
                                    ('builder-choices',self.choices_expander,True)]:
             g.gtk_expander_set_expanded(widget,folds.get(key,default))
         self.loading=False
         self.render_schedule()
         self.render_rush()
         self.render_candidates()
+        self.render_occurrences()
         self.render_drafts()
         self.refresh_courts()
         g.gtk_adjustment_set_value(g.gtk_scrolled_window_get_vadjustment(self.w['editor_scroll']),0)
@@ -1217,7 +1278,7 @@ class GtkDesktop:
 
     # ==========================================
     # Function: Update interaction locks only when the effective busy/editor state changes.
-    # Method: Keep stop, capture, scrolling, and goal inspection responsive during browser work.
+    # Method: Lock history deletion with other mutations while preserving stop, scrolling and inspection.
     # ==========================================
     def set_busy(self):
         g=self.g
@@ -1242,6 +1303,8 @@ class GtkDesktop:
         if self.history_window:
             for button in self.history_delete_buttons:
                 g.gtk_widget_set_sensitive(button,not busy)
+        for button in self.occurrence_delete_buttons.values():
+            g.gtk_widget_set_sensitive(button,not busy)
         g.gtk_widget_set_sensitive(self.w['settings'],True)
         self.set_settings_busy()
         for key,(row,name,detail,plus,delete) in self.sidebar_rows.items():

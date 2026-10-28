@@ -62,17 +62,17 @@ class RepeatTests(unittest.TestCase):
         self.assertEqual([g.candidates[0].date for g in self.config.goals[-2:]], ["2026-10-28", "2026-10-29"])
 
     # ==========================================
-    # Function: Retain uncertain order requirements while retiring old rolling UI rows.
-    # Method: Prune only safe past occurrences and keep their durable journal externally intact.
+    # Function: Preserve generated historical requirements until the user explicitly deletes them.
+    # Method: Advance through unknown and submitted records without pruning the template-owned history.
     # ==========================================
-    def test_unknown_is_kept_and_safe_old_row_is_pruned(self):
+    def test_historical_occurrences_remain_until_explicitly_deleted(self):
         self.config.goals = [Goal("old", "old", [replace(self.rule.candidates[0], date="2026-10-20")], repeat_id="gym")]
         record = {"status": "unknown"}
         materialize_daily(self.config, self.now, lambda g: record)
         self.assertEqual(self.config.goals[0].id, "old")
         record["status"] = "submitted"
-        self.assertTrue(materialize_daily(self.config, self.now, lambda g: record))
-        self.assertNotIn("old", [g.id for g in self.config.goals])
+        self.assertFalse(materialize_daily(self.config, self.now, lambda g: record))
+        self.assertIn("old", [g.id for g in self.config.goals])
 
     # ==========================================
     # Function: Copy priority lists without copying progress or mutating the source.

@@ -221,7 +221,7 @@ class SjtuPage:
 
     # ==========================================
     # Function: Return a settled snapshot instead of racing a separate readiness check.
-    # Method: Await native reads, overlay removal, expected tabs, and a quiet DOM window.
+    # Method: Await native reads and a quiet DOM window, reusing identical verified state until a request or DOM change.
     # ==========================================
     def loaded_snapshot(self, expected_date=None, expected_sport=None):
         deadline = time.monotonic() + self.config.grid_timeout_seconds
@@ -246,8 +246,7 @@ class SjtuPage:
                     (expected_date is None or shot["active_date"] == expected_date) and
                     (expected_sport is None or shot["sport"] == expected_sport)):
                 state = (shot, self._read_revision)
-                if (shot['venue'] == self.config.venue and state == getattr(self, '_settled', None)
-                        and now - getattr(self, '_settled_at', 0) < .05):
+                if shot['venue'] == self.config.venue and state == getattr(self, '_settled', None):
                     return shot
                 if state != previous:
                     previous, stable_since = state, now
@@ -312,8 +311,42 @@ class SjtuPage:
         return self.page.evaluate(SNAPSHOT_JS)
 
     # ==========================================
+    # Function: Verify a selection without repeating inventory-settling delays for local checkbox and summary changes.
+    # Method: Require unchanged settled inventory, origin and request revision; fall back to full settling on any uncertainty.
+    # ==========================================
+    def verify_current_selection(self, target):
+        if self.stop():
+            raise InterruptedError('用户停止监测')
+        shot=self.snapshot()
+        if self._read_error:
+            raise self._read_error
+        settled=getattr(self,'_settled',None)
+        origin=urlsplit(self.config.booking_url)
+        actual=urlsplit(self.page.url)
+
+        # ==========================================
+        # Function: Compare stock independently from the user's selected cells and order summary.
+        # Method: Normalize selected cells to available while keeping all routing and unavailable-cell data exact.
+        # ==========================================
+        def inventory(value):
+            return ({k:v for k,v in value.items() if k not in {'rows','summary','selected_count','total'}} |
+                    {'rows':[['available' if cell=='selected' else cell for cell in row] for row in value['rows']]})
+
+        if (settled and shot and not shot['loading'] and not self._pending_reads
+                and self._read_revision==settled[1] and (actual.scheme,actual.netloc)==(origin.scheme,origin.netloc)
+                and inventory(shot)==inventory(settled[0])):
+            try:
+                verify_selection(shot,self.config,target)
+            except RuntimeError:
+                pass  # A framework may still be updating its visible summary; the full check remains authoritative.
+            else:
+                self._settled=(shot,self._read_revision)
+                return
+        verify_selection(self.loaded_snapshot(expected_date=target.date,expected_sport=self.config.sport),self.config,target)
+
+    # ==========================================
     # Function: Select every required hour for a candidate.
-    # Method: Click row/column cells, then verify each selected class.
+    # Method: Click exact cells and verify their complete visible selection without re-waiting an unchanged inventory.
     # ==========================================
     def select(self, target):
         cells = candidate_cells(self.loaded_snapshot(expected_date=target.date, expected_sport=self.config.sport), target)
@@ -327,15 +360,15 @@ class SjtuPage:
             expect(cell).to_have_class(re.compile(r"\bunselected-seat\b"))
             cell.click()
             expect(cell).to_have_class(re.compile(r"\bselected-seat\b"))
-        verify_selection(self.loaded_snapshot(expected_date=target.date, expected_sport=self.config.sport), self.config, target)
+        self.verify_current_selection(target)
         return True
 
     # ==========================================
     # Function: Open the booking notice and accept it as requested.
-    # Method: Click the exact order button, scope to the visible terms dialog.
+    # Method: Use native notice controls and verify the full selection before opening and after accepting the dialog.
     # ==========================================
     def prepare_submit(self, target):
-        verify_selection(self.loaded_snapshot(expected_date=target.date, expected_sport=self.config.sport), self.config, target)
+        self.verify_current_selection(target)
         self.page.locator(ROOT + " .butMoney").get_by_role("button", name="立即下单", exact=True).click()
         dialog = self.page.locator('.el-dialog:visible').filter(has_text="本人已认真阅读")
         dialog.wait_for(state="visible")
@@ -347,5 +380,5 @@ class SjtuPage:
         from playwright.sync_api import expect
         expect(checkbox).to_be_checked()
         expect(submit).to_be_enabled()
-        verify_selection(self.loaded_snapshot(expected_date=target.date, expected_sport=self.config.sport), self.config, target)
+        self.verify_current_selection(target)
         return submit

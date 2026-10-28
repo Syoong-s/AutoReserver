@@ -8,11 +8,12 @@ import os
 from pathlib import Path
 import tempfile
 import threading
+import time
 import unittest
 from zoneinfo import ZoneInfo
 
 from autoreserve.browser import open_browser, origin_of, save_session
-from autoreserve.config import Config, Goal, Target
+from autoreserve.config import BookingContext, Config, Goal, Target
 from autoreserve.runner import run_reservation
 from autoreserve.sjtu import GridNotReady, SjtuPage, candidate_cells
 from autoreserve.catalog import ANY_COURT
@@ -49,6 +50,69 @@ class FastPacer(ReadPacer):
 # ==========================================
 @unittest.skipUnless(os.environ.get("RUN_BROWSER_TESTS") == "1", "设置 RUN_BROWSER_TESTS=1 启用真实浏览器测试")
 class BrowserTests(unittest.TestCase):
+    # ==========================================
+    # Function: Keep the optimized selection path from trusting a grid while a native recheck is in flight.
+    # Method: Start an unmasked delayed inventory chain that clears selection and require failure before order submission.
+    # ==========================================
+    def test_selection_fast_path_waits_for_native_recheck(self):
+        with self.browser(max_total_price='50.00') as (config,_,page):
+            page.goto(config.booking_url)
+            site=SjtuPage(page,config)
+            try:
+                site.ready()
+                site.choose_sport()
+                site.choose_date(self.target.date)
+                self.assertTrue(site.select(self.target))
+                page.evaluate("""() => {
+                    void fetch('/manage/fieldDetail/queryFieldReserveSituationIsFull', {
+                      method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({delay:0.35})
+                    }).then(() => { selected=[]; render(); });
+                }""")
+                with self.assertRaisesRegex(RuntimeError,'已选数量'):
+                    site.prepare_submit(self.target)
+                self.assertEqual(page.evaluate('submitClicks'),0)
+                self.assertEqual(self.journal.entries(),[])
+            finally:
+                site.close()
+
+    # ==========================================
+    # Function: Submit an available target without repeating DOM quiet-window sleeps on the selection hot path.
+    # Method: Use a production-style scoped venue and observe explicit adapter waits from availability to the final request.
+    # ==========================================
+    def test_order_hot_path_avoids_repeated_settling(self):
+        goal=Goal('fast-order','快速下单',[self.target])
+        found,submits,waits=[],[],[]
+
+        # ==========================================
+        # Function: Mark the beginning of the discovered-candidate hot path.
+        # Method: Use the production progress event immediately before selection and notice acceptance.
+        # ==========================================
+        def progress(event):
+            if '发现 1 个可预约目标' in event['message']:
+                found.append(time.monotonic())
+
+        with self.browser(goals=[goal],targets=[]) as (config,_,page):
+            config.goals=[replace(goal,candidates=[replace(self.target,context=BookingContext(config.booking_url,config.venue,config.sport))])]
+            original=page.wait_for_timeout
+
+            # ==========================================
+            # Function: Detect redundant settle sleeps after the target has been found.
+            # Method: Preserve all browser pumping while recording waits before the final request.
+            # ==========================================
+            def wait(milliseconds):
+                if found and not submits:
+                    waits.append(milliseconds)
+                return original(milliseconds)
+
+            page.on('request',lambda request:submits.append(time.monotonic()) if request.url.endswith('/ConfirmOrder') else None)
+            with patch.object(page,'wait_for_timeout',wait):
+                result=run_reservation(page,config,self.journal,self.root/'artifacts',True,progress)
+            self.assertEqual(result['status'],'completed')
+            self.assertEqual(len(submits),1)
+            self.assertEqual(waits,[])
+            self.assertEqual(page.evaluate('payClicks'),0)
+            print(f'Local candidate-to-submit request: {(submits[0]-found[0])*1000:.1f} ms')
+
     # ==========================================
     # Function: Start a local server on an automatically assigned port.
     # Method: Bind only to loopback and serve in a background thread.

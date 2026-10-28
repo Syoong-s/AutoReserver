@@ -30,18 +30,31 @@ class Workspace:
             self.selected = self.items()[0][0]
 
     # ==========================================
-    # Function: List dated goals and weekly templates in sidebar order.
-    # Method: Prefix display identities without changing any persisted IDs.
+    # Function: List independent dated goals and weekly templates in sidebar order.
+    # Method: Keep generated occurrences owned by their template and out of independent execution controls.
     # ==========================================
     def items(self):
-        return [(g['id'], g) for g in self.data['goals']] + [('rule:'+r['id'], r) for r in self.data['repeat_rules']]
+        return [(g['id'], g) for g in self.data['goals'] if not g.get('repeat_id')] + [('rule:'+r['id'], r) for r in self.data['repeat_rules']]
 
     # ==========================================
     # Function: Resolve a stable workspace identity.
-    # Method: Select by ID rather than widget position or display text.
+    # Method: Resolve persisted collections directly so hidden occurrences remain available for history deletion.
     # ==========================================
     def get(self, identity=None):
-        return next((item for key, item in self.items() if key == (identity or self.selected)), None)
+        identity = identity or self.selected
+        values = self.data['repeat_rules'] if self.repeating(identity) else self.data['goals']
+        return next((item for item in values if item['id'] == (identity[5:] if self.repeating(identity) else identity)), None)
+
+    # ==========================================
+    # Function: List frozen executions belonging to a recurring template.
+    # Method: Preserve their original requirements and show the newest booking dates first.
+    # ==========================================
+    def occurrences(self, identity=None):
+        identity = identity or self.selected
+        if not self.repeating(identity):
+            return []
+        return sorted((g for g in self.data['goals'] if g.get('repeat_id') == identity[5:]),
+                      key=lambda g: (g['candidates'][0]['date'], g['id']), reverse=True)
 
     # ==========================================
     # Function: Distinguish templates from immutable generated date occurrences.
@@ -59,12 +72,14 @@ class Workspace:
 
     # ==========================================
     # Function: Protect dated order requirements from accidental editing.
-    # Method: Permit only pending/preview goals while templates remain independent of occurrences.
+    # Method: Freeze generated occurrences and recorded one-time goals while leaving templates editable when idle.
     # ==========================================
     def editable(self, identity=None):
         identity = identity or self.selected
         if not self.get(identity):
             raise ValueError('请先选择或新建一个预约目标')
+        if self.get(identity).get('repeat_id'):
+            raise ValueError('重复执行目标由模板管理，请修改重复模板')
         if not self.repeating(identity) and self.states.get(identity, {}).get('status', 'pending') not in {'pending', 'preview'}:
             raise ValueError('此目标已有执行记录，请使用 + 创建下一天目标')
 
@@ -173,14 +188,22 @@ class Workspace:
 
     # ==========================================
     # Function: Preserve explicit priority when reordering goals or candidates.
-    # Method: Swap adjacent entries without changing identities or order records.
+    # Method: Swap adjacent visible goals without promoting hidden generated executions into sidebar order.
     # ==========================================
     def move(self, delta, candidate=None):
         if not self.get():
             return
         if candidate is None:
             values = self.data['repeat_rules' if self.repeating() else 'goals']
-            index = values.index(self.get())
+            positions=[i for i,item in enumerate(values) if self.repeating() or not item.get('repeat_id')]
+            index = positions.index(values.index(self.get()))
+            other=index+delta
+            if 0 <= other < len(positions):
+                first,second=positions[index],positions[other]
+                values[first],values[second]=values[second],values[first]
+                self.dirty=True
+                return other
+            return index
         else:
             self.editable()
             values, index = self.get()['candidates'], candidate

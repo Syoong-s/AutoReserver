@@ -21,6 +21,7 @@ AutoReserve combines a high-performance GTK 3 desktop interface with an automate
 - **Clear Status & Native Notifications**: Color-coded sidebar badges (monitoring, weekly repeat, pending, completed, attention needed) and non-blocking native popup dialogs displaying full order details upon successful booking.
 - **Safety, Rate Limiting & Duplicate Protection**: Shared global request budgeting and automatic exponential backoff on server load. A persistent local transaction journal prevents duplicate reservations across client restarts.
 - **Independent Goals & Order History**: Save/start only the selected goal, retain other drafts, delete completed goals, and review or delete local order records in the sidebar's **历史订单** window.
+- **Template-Owned Executions**: Generated recurring targets appear in the template's **重复执行目标** expander beneath target settings. They keep frozen requirements and cannot start independently. A green dot marks the running template; deleting an execution preserves order history.
 - **Zero-Cloud Privacy**: Credentials, session tokens, configurations, and order journals remain strictly stored on your local machine.
 
 ---

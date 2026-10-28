@@ -28,6 +28,50 @@ from test_catalog import native_config,directory_fixture
 @unittest.skipUnless(os.environ.get('RUN_GTK_TESTS')=='1','设置 RUN_GTK_TESTS=1 启用 GTK 实机测试')
 class GtkWorkspaceTests(unittest.TestCase):
     # ==========================================
+    # Function: Show generated executions below their template with deletion and a truthful running indicator.
+    # Method: Use real GTK widgets and the persisted deletion worker while keeping independent execution unavailable.
+    # ==========================================
+    def test_template_occurrences_panel_and_running_dot(self):
+        from dataclasses import asdict
+        from autoreserve.config import Goal
+        app,g=self.app,self.g
+        app.toggle_repeat()
+        identity=app.model.selected
+        app.save()
+        app.save_worker.join(2)
+        self.pump(.12)
+        config=load_config(self.controller.config_path)
+        rule=config.repeat_rules[0]
+        goal=Goal('daily-'+rule.id+'-2026-10-28',rule.name,rule.candidates,repeat_id=rule.id)
+        config.goals.append(goal)
+        save_config(config,self.controller.config_path)
+        self.controller.emit('workspace',asdict(config))
+        self.pump(.12)
+        self.assertEqual(list(app.sidebar_rows),[identity])
+        self.assertEqual(set(app.occurrence_delete_buttons),{goal.id})
+        self.assertTrue(g.gtk_widget_get_visible(app.occurrence_expander))
+        g.gtk_expander_set_expanded(app.occurrence_expander,True)
+        self.pump()
+        self.assertTrue(g.gtk_widget_get_mapped(app.occurrence_body))
+        self.assertEqual(g.gtk_widget_get_parent(app.occurrence_expander),app.w['editor'])
+        dot=app.running_dots[identity]
+        self.assertFalse(g.gtk_widget_get_visible(dot))
+        self.controller.busy,self.controller.operation,self.controller.active_identity=True,'run',identity
+        app.set_busy()
+        self.assertTrue(g.gtk_widget_get_visible(dot))
+        self.assertFalse(g.gtk_widget_get_sensitive(app.occurrence_delete_buttons[goal.id]))
+        self.controller.busy,self.controller.operation=False,'idle'
+        app.set_busy()
+        self.assertFalse(g.gtk_widget_get_visible(dot))
+        app.delete_goal(goal.id)
+        app.save_worker.join(2)
+        self.pump(.12)
+        self.assertEqual(app.model.selected,identity)
+        self.assertEqual(app.occurrence_delete_buttons,{})
+        self.assertEqual(load_config(self.controller.config_path).goals,[])
+        self.assertEqual(app.errors,[])
+
+    # ==========================================
     # Function: Build an isolated production GTK desktop with static venue metadata.
     # Method: Preserve user files and fail any unexpected browser/network action.
     # ==========================================

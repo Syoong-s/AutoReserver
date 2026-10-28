@@ -81,21 +81,13 @@ def next_daily(config, now=None):
 
 # ==========================================
 # Function: Materialize today's enabled weekday rules without duplicate orders across restarts.
-# Method: Check the execution weekday and assign one stable occurrence per rule/day.
+# Method: Keep historical occurrences until explicitly deleted and assign one stable occurrence per rule/day.
 # ==========================================
 def materialize_daily(config, now=None, records=None):
     now = now or datetime.now(ZoneInfo(config.timezone))
     now = now.astimezone(ZoneInfo(config.timezone))
     today, changed = now.date(), False
-    records = records or (lambda goal: None)
-    kept = []
-    for goal in config.goals:
-        record = records(goal)
-        status = record["status"] if record else "pending"
-        if goal.repeat_id and goal.candidates[0].date < today.isoformat() and status in {"pending", "submitted", "rejected", "expired", "preview"}:
-            changed = True  # The journal retains every order and occupied slot.
-        else:
-            kept.append(goal)
+    kept = list(config.goals)
     identities = {g.id for g in kept}
     for rule in config.repeat_rules:
         for execution_day in (today, today + timedelta(days=1)):
@@ -116,7 +108,7 @@ def materialize_daily(config, now=None, records=None):
             identities.add(identity)
             changed = True
     if len(kept) > 100 or sum(len(g.candidates) for g in kept) > 1000:
-        raise ValueError("重复目标达到工作区上限，请删除不再使用的普通目标或减少候选")
+        raise ValueError("重复目标达到工作区上限，请在模板下方删除历史执行目标或减少候选；订单记录会保留")
     if changed:
         config.goals = kept
     return changed

@@ -139,7 +139,7 @@ class DesktopController(Controller):
 
     # ==========================================
     # Function: Save one goal or template without applying edits from any other working draft.
-    # Method: Merge the selected validated projection into the current disk config and remove only its converted source IDs.
+    # Method: Merge one editable projection, rejecting frozen generated executions and removing only converted source IDs.
     # ==========================================
     def save_goal(self, data, identity, removed=()):
         with self.lock:
@@ -163,6 +163,8 @@ class DesktopController(Controller):
                 if len(projection.goals)!=1 or projection.goals[0].id!=identity or projection.repeat_rules:
                     raise ValueError('保存内容必须只包含当前目标')
                 replacement = projection.goals[0]
+                if replacement.repeat_id or any(g.id==identity and g.repeat_id for g in config.goals):
+                    raise ValueError('重复执行目标不能单独修改，请修改所属重复模板')
                 config.goals = [replacement if g.id==replacement.id else g for g in config.goals]
                 if not any(g.id==replacement.id for g in config.goals):
                     config.goals.append(replacement)
@@ -299,7 +301,7 @@ class DesktopController(Controller):
 
     # ==========================================
     # Function: Start an explicitly authorized login, metadata read, or selected-goal monitoring session.
-    # Method: Scope worker configurations before validation, explain local order conflicts and serialize account actions.
+    # Method: Scope workers to independent goals or templates, reject direct occurrence starts and serialize account actions.
     # ==========================================
     def start(self, operation, date=None, goal_id=None):
         if operation not in {"login", "catalog", "run"}:
@@ -325,6 +327,8 @@ class DesktopController(Controller):
                         goal = next((g for g in config.goals if g.id==goal_id),None)
                         if goal is None:
                             raise ValueError('请先保存当前目标')
+                        if goal.repeat_id:
+                            raise ValueError('重复执行目标不能单独启动，请启动所属重复模板')
                         config = replace(config,goals=[goal],repeat_rules=[],targets=[])
                 config.validate(require_targets=True)
             if operation != "login" and not (self.auth_dir / "session.json").exists():
