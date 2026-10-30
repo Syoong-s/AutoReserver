@@ -312,3 +312,11 @@ GTK 仅在当前目标运行期间冻结其要求，已完成/失败/待核对�
 客户端仅在返回体育平台同源且 currentUser 响应含有效身份时自动保存会话。取消或未核验失败保留原会话；网页导航期间的短暂上下文变化允许有界重试。场馆目录不存在时，另开初始化进度窗口；目录读取继续遵守两秒间隔，显示当前场馆及计数。失败后保留已确认的登录，可单独重试初始化；有效目录缓存不触发进度弹窗或网络刷新。
 
 没有新增依赖。Linux 本地测试使用 Python 3.14.4、GTK 3.24.52、Playwright 1.64.1 和 Chromium revision 1248；Windows 沿用 Python 3.14.5 及原固定 GTK/Playwright 运行库。源码启动仍为 `./start-gui.sh`，发布包通过 `AutoReserve` / `AutoReserve.exe` 启动。语法检查为 `python -m compileall -q autoreserve scripts tests`；回归为 `./test.sh`，或在既有私有环境内设置 `RUN_BROWSER_TESTS=1 RUN_GTK_TESTS=1` 后运行 `python -m unittest discover -s tests -v`。打包为 `python3 tools/release.py --expected-tag v0.17.0` 与 `python3 tools/build_windows.py --expected-tag v0.17.0`。
+
+## v0.17.1：登录回跳识别与弹窗适配
+
+旧的内嵌登录核验把前端 `sessionStorage.token` 作为请求前提，并把完整身份响应限制为 1.2 秒；官方首页只在部分回跳参数存在时初始化该字段，Cookie 登录已经成功时也可能一直等待。新流程直接异步核验同源 `currentUser` 返回的有效身份，每个页面最多一个在途请求，完整响应上限 15 秒，失败后有间隔地重试。读取期间持续绘制和处理输入。仅在服务器确认身份后，按官方首页逻辑补齐响应中签发的 `params.JSESSIONID` 与相关显示字段；已有有效字段保留。仅有本地 token 或匿名接口的成功状态均不能确认登录。
+
+浏览器使用 1100×760 的布局视口；普通 jAccount 页面显示 `.login-layout` 的实际范围，出现外部验证弹层时显示完整视口。`LoginFrame` 同时携带图片和裁切坐标，GTK 按父窗口所在显示器的可用区域等比缩放，并以实际内容的自然尺寸调整子窗口。鼠标坐标按当前帧反向换算，周围留白不会触发网页点击，拖动到边界外释放仍能结束按键。显示图片前不接受盲点输入。无新增依赖；仍使用 Python 3.14、GTK 3.24.52、Playwright 1.64.1 与既有浏览器运行时。
+
+源码启动保持 `./start-gui.sh`，检查命令为 `python -m compileall -q autoreserve scripts tests` 与 `RUN_BROWSER_TESTS=1 RUN_GTK_TESTS=1 python -m unittest discover -s tests -v`（加载既有私有运行库后执行）。构建使用 `python3 tools/release.py --expected-tag v0.17.1` 和 `python3 tools/build_windows.py --expected-tag v0.17.1`。测试包含无前端 token 的 Cookie 登录、延迟 2.5 秒的身份响应、失败身份与伪旧 token、登录卡片/验证弹层裁切，以及原生缩放与坐标映射。

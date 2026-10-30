@@ -113,6 +113,39 @@ class GtkWorkspaceTests(unittest.TestCase):
         app.directory_progress({'stage':'done','message':'完成'})
 
     # ==========================================
+    # Function: Match login popup size to content and preserve pointer alignment when the screen requires scaling.
+    # Method: Decode a large known frame, force compact display bounds, and verify native size, transforms and padding rejection.
+    # ==========================================
+    def test_login_popup_fits_content_and_maps_scaled_input(self):
+        from autoreserve.login_dialog import LoginDialog
+        from autoreserve.login_surface import LoginFrame
+        import struct
+        import zlib
+        app,g=self.app,self.g
+        dialog=LoginDialog(app)
+
+        # ==========================================
+        # Function: Encode a benign RGB test image without an additional imaging package.
+        # Method: Build standard PNG chunks with CRCs for the actual Windows/Linux decoder and scaler.
+        # ==========================================
+        def chunk(kind,data):
+            return struct.pack('!I',len(data))+kind+data+struct.pack('!I',zlib.crc32(kind+data))
+        png=(b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('!2I5B',1200,800,8,2,0,0,0))+
+             chunk(b'IDAT',zlib.compress((b'\0'+b'\xff'*3600)*800))+chunk(b'IEND',b''))
+        dialog.max_width,dialog.max_height=300,180
+        dialog.surface.frame=LoginFrame(png,'local.test',(200,100,1200,800))
+        dialog.refresh()
+        self.wait_layout(lambda:g.gtk_widget_get_allocated_height(dialog.image)==180)
+        self.assertEqual(dialog.display_size,(270,180))
+        x,y=dialog.page_coordinates(27,45)
+        self.assertAlmostEqual(x,320)
+        self.assertAlmostEqual(y,300)
+        self.assertIsNone(dialog.page_coordinates(300,20))
+        self.assertTrue(g.gtk_widget_get_sensitive(dialog.events))
+        self.assertEqual(g.gtk_widget_get_allocated_height(dialog.image),180)
+        dialog.close()
+
+    # ==========================================
     # Function: Complete a real in-client login using native mouse/key event decoding and headless Chromium rendering.
     # Method: Operate a required-field loopback form through GTK, then require auto-save and a separate initialization popup.
     # ==========================================
@@ -161,7 +194,8 @@ class GtkWorkspaceTests(unittest.TestCase):
                     try:
                         value=C.cast(event,C.POINTER(Button)).contents
                         value.window=g.g_object_ref(g.gtk_widget_get_window(dialog.events))
-                        value.x,value.y,value.button=60,45,1
+                        left,top,scale_x,scale_y=dialog.view
+                        value.x,value.y,value.button=(60-left)/scale_x,(45-top)/scale_y,1
                         dialog.pointer(event,kind)
                     finally:
                         lib.gdk_event_free(event)

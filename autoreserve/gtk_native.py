@@ -146,8 +146,11 @@ class GtkNative:
                     'gdk_event_get_scroll_deltas': (I,P,C.POINTER(D),C.POINTER(D)),
                     'gdk_atom_intern_static_string': (P,S),
                     'gdk_display_get_default': (P,), 'gdk_display_get_primary_monitor': (P,P),
+                    'gdk_display_get_monitor_at_window': (P,P,P),
                     'gdk_display_get_monitor': (P,P,I), 'gdk_monitor_get_workarea': (None,P,C.POINTER(Rectangle))},
             'pixbuf': {'gdk_pixbuf_savev': (I,P,S,S,P,P,P), 'gdk_pixbuf_loader_new': (P,),
+                       'gdk_pixbuf_get_width': (I,P), 'gdk_pixbuf_get_height': (I,P),
+                       'gdk_pixbuf_scale_simple': (P,P,I,I,I),
                        'gdk_pixbuf_loader_write': (I,P,P,C.c_size_t,P), 'gdk_pixbuf_loader_close': (I,P,P),
                        'gdk_pixbuf_loader_get_pixbuf': (P,P)},
         }

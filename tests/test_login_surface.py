@@ -11,7 +11,7 @@ from unittest.mock import Mock, patch
 
 from autoreserve.config import save_config
 from autoreserve.desktop_controller import DesktopController
-from autoreserve.login_surface import LoginSurface, login_url
+from autoreserve.login_surface import LoginSurface, LoginFrame, login_url, authenticated
 from autoreserve.state import private_json
 from test_catalog import native_config, directory_fixture
 from test_catalog_browser import DirectoryHandler
@@ -39,10 +39,11 @@ class LoginSurfaceTests(unittest.TestCase):
                             ('text',('temporary-text',)),('key',('Tab',))]:
             self.assertTrue(surface.send(kind,*values))
         surface.pump(page)
-        self.assertEqual(surface.take_frame(),(b'local-frame','jaccount.sjtu.edu.cn'))
+        self.assertEqual(surface.take_frame()[:2],(b'local-frame','jaccount.sjtu.edu.cn'))
         self.assertIsNone(surface.take_frame())
         page.keyboard.insert_text.assert_called_once_with('temporary-text')
-        page.screenshot.assert_called_once_with(type='png',timeout=3000)
+        page.screenshot.assert_called_once_with(type='png',timeout=3000,
+            clip={'x':0,'y':0,'width':640,'height':400},caret='initial')
         for _ in range(256):self.assertTrue(surface.send('key','Tab'))
         self.assertFalse(surface.send('key','Tab'))
         surface.close()
@@ -71,6 +72,9 @@ class LoginHandler(DirectoryHandler):
     # ==========================================
     def do_GET(self):
         if self.path=='/system/user/currentUser':
+            if hasattr(self.server,'identity_payload'):
+                self.server.calls.append(self.path)
+                return self.reply(self.server.identity_payload)
             return super().do_GET()
         self.send_response(200)
         self.send_header('Content-Type','text/html; charset=utf-8')
@@ -189,17 +193,82 @@ class EmbeddedLoginBrowserTests(unittest.TestCase):
         self.assertEqual(list(self.root.rglob('*.png')),[])
 
     # ==========================================
-    # Function: Avoid saving cookies before the official callback has populated its frontend session state.
-    # Method: Return an authenticated current-user identity while leaving sessionStorage empty and require login to remain open.
+    # Function: Recognize a completed official cookie login even when the homepage never initialized its frontend token.
+    # Method: Return the real site's identity/session shape and require automatic save with server-issued frontend bootstrap fields.
     # ==========================================
-    def test_server_identity_alone_does_not_capture_incomplete_callback(self):
+    def test_cookie_login_without_frontend_token_autosaves(self):
         self.server.logged_in=True
+        self.server.identity_payload={'code':0,'data':{'loginName':'local-user','userType':'student',
+            'params':{'JSESSIONID':'server-issued-test-session'}}}
+        with patch('autoreserve.desktop_controller.HOME_URL',self.base):
+            self.controller.start('login',login_surface=self.surface)
+            self.controller.worker.join(20)
+        self.assertFalse(self.controller.busy)
+        self.assertEqual(self.controller.auth_status,'已登录')
+        import json
+        session=json.loads((self.root/'auth/session.json').read_text())['values']
+        self.assertEqual(session['token'],'server-issued-test-session')
+        self.assertEqual(session['isname'],'local-user')
+        self.assertIsNotNone(self.controller.cache.load())
+
+    # ==========================================
+    # Function: Keep login interactive while waiting longer than the former 1.2-second identity deadline.
+    # Method: Delay a real response body, count fresh frames and require one in-flight probe followed by automatic confirmation.
+    # ==========================================
+    def test_slow_identity_response_keeps_frames_live_and_autosaves(self):
+        self.server.logged_in=True
+        self.server.body_delays={'/system/user/currentUser':[2.5]}
         with patch('autoreserve.desktop_controller.HOME_URL',self.base):
             self.controller.start('login',login_surface=self.surface)
             self.wait_frame()
-            time.sleep(2.3)
-            self.assertTrue(self.controller.busy)
-            self.assertFalse((self.root/'auth/session.json').exists())
-            self.assertIsNone(self.controller.cache.load())
-            self.surface.close()
-            self.controller.worker.join(10)
+            frames=0
+            until=time.monotonic()+1.6
+            while time.monotonic()<until:
+                if self.surface.take_frame():frames+=1
+                time.sleep(.02)
+            self.assertGreaterEqual(frames,3)
+            self.assertEqual(self.server.calls.count('/system/user/currentUser'),1)
+            self.controller.worker.join(20)
+        self.assertFalse(self.controller.busy)
+        self.assertEqual(self.controller.auth_status,'已登录')
+        self.assertTrue((self.root/'auth/session.json').exists())
+
+    # ==========================================
+    # Function: Never accept stale frontend login markers without server-confirmed identity.
+    # Method: Put a token in an unauthenticated real browser and require the asynchronous server check to remain false.
+    # ==========================================
+    def test_stale_frontend_token_cannot_confirm_login(self):
+        from autoreserve.browser import open_browser
+        with open_browser(native_config(),self.root/'auth',login=True,login_surface=self.surface) as (_,page):
+            page.goto(self.base)
+            page.evaluate("sessionStorage.setItem('token','stale-test-token')")
+            for _ in range(12):
+                self.assertFalse(authenticated(page,self.base))
+                page.wait_for_timeout(100)
+        self.assertFalse((self.root/'auth/session.json').exists())
+
+    # ==========================================
+    # Function: Fit the official login region while keeping verification overlays and browser coordinates intact.
+    # Method: Serve a local-only document at the provider origin, verify crop geometry and then reveal an outside dialog.
+    # ==========================================
+    def test_login_card_crop_and_verification_overlay(self):
+        from autoreserve.browser import open_browser
+        document='''<style>body{margin:0}.login-layout{position:absolute;left:250px;top:140px;width:500px;height:320px}
+        [role=dialog]{position:fixed;left:50px;top:40px;width:700px;height:400px;background:white;display:none}</style>
+        <div class=login-layout><input style="position:absolute;left:30px;top:40px"></div><div role=dialog>Verification</div>'''
+        surface=LoginSurface(1100,760)
+        with open_browser(native_config(),self.root/'auth',login=True,login_surface=surface) as (context,page):
+            context.route('https://jaccount.sjtu.edu.cn/**',lambda route:route.fulfill(content_type='text/html',body=document))
+            page.goto('https://jaccount.sjtu.edu.cn/local-fixture')
+            surface.pump(page)
+            frame=surface.take_frame()
+            self.assertEqual(frame.clip,(234,124,532,352))
+            surface.send('move',280,190)
+            surface.send('down','left')
+            surface.send('up','left')
+            surface.send('text','correct-coordinate')
+            surface.pump(page)
+            self.assertEqual(page.locator('input').input_value(),'correct-coordinate')
+            page.locator('[role=dialog]').evaluate("e=>e.style.display='block'")
+            surface.pump(page)
+            self.assertEqual(surface.take_frame().clip,(0,0,1100,760))

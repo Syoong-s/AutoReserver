@@ -162,6 +162,7 @@ def self_test(root, test_source=None):
         cases.extend(GtkWorkspaceTests(name) for name in (
             'test_completed_goal_can_edit_and_reset_from_toolbar',
             'test_login_surface_and_directory_progress_native_windows',
+            'test_login_popup_fits_content_and_maps_scaled_input',
             'test_native_login_interaction_autosaves_and_shows_initialization',
             'test_multiple_workers_allow_new_goal_and_independent_stop',
             'test_inventory_retains_all_venue_cards',

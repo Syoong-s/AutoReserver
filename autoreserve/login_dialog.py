@@ -4,7 +4,7 @@ import ctypes as C
 import time
 
 from .gtk_native import P, S, U, I, D, Rectangle
-from .login_surface import LoginSurface
+from .login_surface import LoginSurface, LoginFrame
 
 KEYS = {'Return':'Enter', 'ISO_Enter':'Enter', 'KP_Enter':'Enter', 'BackSpace':'Backspace',
         'ISO_Left_Tab':'Tab', 'Page_Up':'PageUp', 'Page_Down':'PageDown',
@@ -19,24 +19,28 @@ SPECIAL = {'Tab', 'Escape', 'Delete', 'Home', 'End', 'Insert', 'PageUp', 'PageDo
 # ==========================================
 class LoginDialog:
     # ==========================================
-    # Function: Build a close-only parent-owned official login popup sized for the current monitor.
-    # Method: Use the existing GTK and Chromium runtimes without a separate WebKit/WebView installation.
+    # Function: Build a close-only parent-owned official login popup sized for its parent's monitor.
+    # Method: Start with a compact placeholder, then fit the actual official login content within the monitor work area.
     # ==========================================
     def __init__(self, app):
         self.app, self.g = app, app.g
         g = self.g
         area = Rectangle()
         display = g.gdk_display_get_default()
-        monitor = g.gdk_display_get_primary_monitor(display) or g.gdk_display_get_monitor(display, 0)
+        parent_window=g.gtk_widget_get_window(app.window)
+        monitor=(g.gdk_display_get_monitor_at_window(display,parent_window) if parent_window else None)
+        monitor=monitor or g.gdk_display_get_primary_monitor(display) or g.gdk_display_get_monitor(display, 0)
         g.gdk_monitor_get_workarea(monitor, C.byref(area))
-        width, height = min(820, max(400, area.width-100)), min(500, max(280, area.height-210))
-        self.surface = LoginSurface(width, height)
-        self.window, body, _ = app.child_window('官方账号登录', width+48, height+116)
+        self.max_width, self.max_height = min(1100,max(260,area.width-80)), min(760,max(160,area.height-180))
+        self.surface = LoginSurface(1100,760)
+        width, height = min(560,self.max_width), min(340,self.max_height)
+        self.window, body, _ = app.child_window('官方账号登录', 1, 1)
         g.gtk_window_set_modal(self.window, True)
         self.caption = app.pack(body, app.label('正在打开官方登录页…', 'caption'))
         self.events = g.gtk_event_box_new()
         self.image = g.gtk_image_new()
         g.gtk_widget_set_size_request(self.events, width, height)
+        g.gtk_widget_set_sensitive(self.events,False)
         g.gtk_widget_set_halign(self.image, 1)
         g.gtk_widget_set_valign(self.image, 1)
         g.gtk_container_add(self.events, self.image)
@@ -46,6 +50,8 @@ class LoginDialog:
         g.gtk_widget_add_events(self.events, (1<<2)|(1<<8)|(1<<9)|(1<<21)|(1<<23))
         self.im = g.gtk_im_multicontext_new()
         self.closed, self.last_move = False, 0
+        self.view = (0,0,1,1)
+        self.display_size = (width,height)
         self.im_callback = C.CFUNCTYPE(None,P,S,P)(lambda _, text, __: self.surface.send('text', text.decode('utf-8')) if text else None)
         self.im_handler = g.g_signal_connect_data(self.im, b'commit', C.cast(self.im_callback,P), None, None, 0)
         g.connect(self.events, 'button-press-event', lambda _, event, __: self.pointer(event,'down'), count=3, returns=True)
@@ -72,8 +78,13 @@ class LoginDialog:
         g = self.g
         if g.gdk_event_get_coords(event,C.byref(x),C.byref(y)) and g.gdk_event_get_button(event,C.byref(button)):
             if button.value in {1,2,3}:
+                point=self.page_coordinates(x.value,y.value)
+                if point is None:
+                    if kind=='up':
+                        self.surface.send('up',{1:'left',2:'middle',3:'right'}[button.value])
+                    return True
                 g.gtk_widget_grab_focus(self.events)
-                self.surface.send('move', x.value, y.value)
+                self.surface.send('move', *point)
                 self.surface.send(kind, {1:'left',2:'middle',3:'right'}[button.value])
         return True
 
@@ -86,8 +97,21 @@ class LoginDialog:
         now = time.monotonic()
         if now-self.last_move >= .03 and self.g.gdk_event_get_coords(event,C.byref(x),C.byref(y)):
             self.last_move = now
-            self.surface.send('move', x.value, y.value)
+            point=self.page_coordinates(x.value,y.value)
+            if point is not None:
+                self.surface.send('move', *point)
         return True
+
+    # ==========================================
+    # Function: Keep clicks and verification drags accurate after cropping or scaling the login image.
+    # Method: Map native image pixels back to the displayed frame's browser viewport, ignoring surrounding padding.
+    # ==========================================
+    def page_coordinates(self, x, y):
+        width,height=self.display_size
+        if not (0 <= x < width and 0 <= y < height):
+            return None
+        left,top,scale_x,scale_y=self.view
+        return left+x*scale_x, top+y*scale_y
 
     # ==========================================
     # Function: Scroll longer official login and verification pages inside the popup.
@@ -137,7 +161,7 @@ class LoginDialog:
 
     # ==========================================
     # Function: Render a newly received official login frame without temporary screenshot files.
-    # Method: Decode PNG bytes with GdkPixbufLoader and transfer the pixbuf reference into GtkImage.
+    # Method: Fit the cropped content to the work area, synchronize pointer transforms and let GTK measure the matching window.
     # ==========================================
     def refresh(self):
         if self.closed:
@@ -145,7 +169,7 @@ class LoginDialog:
         frame = self.surface.take_frame()
         if frame is None:
             return
-        data, host = frame
+        data, host = frame[:2]
         g, loader, error = self.g, self.g.gdk_pixbuf_loader_new(), P()
         try:
             buffer = C.create_string_buffer(data)
@@ -153,7 +177,23 @@ class LoginDialog:
                 raise RuntimeError('无法显示官方登录画面，请关闭后重试')
             if not g.gdk_pixbuf_loader_close(loader,C.byref(error)):
                 raise RuntimeError('官方登录画面未完整加载，请关闭后重试')
-            g.gtk_image_set_from_pixbuf(self.image,g.gdk_pixbuf_loader_get_pixbuf(loader))
+            pixbuf=g.gdk_pixbuf_loader_get_pixbuf(loader)
+            source_w,source_h=g.gdk_pixbuf_get_width(pixbuf),g.gdk_pixbuf_get_height(pixbuf)
+            scale=min(1,self.max_width/source_w,self.max_height/source_h)
+            width,height=max(1,int(source_w*scale)),max(1,int(source_h*scale))
+            scaled=g.gdk_pixbuf_scale_simple(pixbuf,width,height,2) if (width,height)!=(source_w,source_h) else None
+            try:
+                g.gtk_image_set_from_pixbuf(self.image,scaled or pixbuf)
+            finally:
+                if scaled:
+                    g.g_object_unref(scaled)
+            left,top,content_w,content_h=frame.clip if isinstance(frame,LoginFrame) else (0,0,source_w,source_h)
+            self.view=(left,top,content_w/width,content_h/height)
+            if self.display_size!=(width,height):
+                self.display_size=(width,height)
+                g.gtk_widget_set_size_request(self.events,width,height)
+                g.gtk_window_resize(self.window,1,1)
+            g.gtk_widget_set_sensitive(self.events,True)
             g.label(self.caption,'官方登录 · '+host)
         finally:
             if error:
