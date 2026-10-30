@@ -122,7 +122,7 @@ class Controller:
 
     # ==========================================
     # Function: Save UI preferences without invalidating successful orders.
-    # Method: Protect recorded requirements and allow an internal scoped saver to preserve unrelated running workers.
+    # Method: Keep durable goal identity stable while allowing stopped requirements to change without rewriting order history.
     # ==========================================
     def save(self, data, *, allow_busy=False, notify=True):
         with self.lock:
@@ -139,12 +139,6 @@ class Controller:
                     if record:
                         if config.goal_key(goal) != old.goal_key(previous):
                             raise ValueError("已有订单目标的身份不能修改，请添加新目标")
-                        before = sorted(json.dumps(asdict(t), sort_keys=True) for t in previous.candidates)
-                        after = sorted(json.dumps(asdict(t), sort_keys=True) for t in goal.candidates)
-                        if before != after:
-                            raise ValueError("已有提交记录的目标不能改成另一项预约，请添加新目标")
-                        if (config.booking_url, config.venue, config.sport) != (old.booking_url, old.venue, old.sport):
-                            raise ValueError("已有订单记录时请保留原场馆配置，新场馆请使用独立配置")
             finally:
                 journal.close()
             save_config(config, self.config_path)

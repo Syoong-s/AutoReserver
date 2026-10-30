@@ -88,7 +88,7 @@ def check_window(app):
 
 # ==========================================
 # Function: Exercise the portable runtime independently of tests, demo files or repository metadata.
-# Method: Verify independent real browser workers, whole-round cadence, scoped native controls and concurrent journal safety.
+# Method: Verify native login/reset, independent browsers, warm venue tabs, scoped controls and concurrent journal safety.
 # ==========================================
 def self_test(root, test_source=None):
     root = Path(root)
@@ -146,6 +146,8 @@ def self_test(root, test_source=None):
         from test_multivenue import MultiVenueTests
         from test_goal_actions import GoalActionTests
         from test_independent_workers import IndependentWorkerTests,IndependentBrowserTests,CycleTimingTests
+        from test_venue_pages import VenuePagesTests
+        from test_login_surface import LoginSurfaceTests,EmbeddedLoginBrowserTests
         cases_backend=unittest.defaultTestLoader.loadTestsFromTestCase(GoalActionTests)
         cases = [GtkWorkspaceTests(name) for name in (
             'test_settings_first_frame_has_native_close_only_header',
@@ -158,6 +160,9 @@ def self_test(root, test_source=None):
             'test_candidate_composer_preserves_drafts_on_dismiss',
             'test_font_size_persists_without_changing_booking')]
         cases.extend(GtkWorkspaceTests(name) for name in (
+            'test_completed_goal_can_edit_and_reset_from_toolbar',
+            'test_login_surface_and_directory_progress_native_windows',
+            'test_native_login_interaction_autosaves_and_shows_initialization',
             'test_multiple_workers_allow_new_goal_and_independent_stop',
             'test_inventory_retains_all_venue_cards',
             'test_close_after_running_task_preserves_unsaved_goal',
@@ -179,6 +184,10 @@ def self_test(root, test_source=None):
                       MultiVenueTests('test_zero_duration_continues_until_stopped'),
                       MultiVenueTests('test_hash_route_venue_switch_reloads_document'),
                       MultiVenueTests('test_failed_first_venue_does_not_skip_second_goal'),
+                      MultiVenueTests('test_warm_rounds_reuse_tabs_and_refresh_each_venue'),
+                      MultiVenueTests('test_cached_venue_is_refreshed_before_order'),
+                      MultiVenueTests('test_many_venues_remain_bounded_and_complete'),
+                      MultiVenueTests('test_calendar_expiry_reloads_cached_venues'),
                       RushBrowserTests('test_release_gates_selection_and_discards_prewarm_stock'),
                       RushBrowserTests('test_unopened_seventh_day_reloads_until_published')])
         cases.extend(DirectoryBrowserTests(name) for name in (
@@ -186,7 +195,8 @@ def self_test(root, test_source=None):
             'test_directory_timeout_preserves_captured_login',
             'test_browser_abort_error_retries_once'))
         independent=[unittest.defaultTestLoader.loadTestsFromTestCase(kind)
-                     for kind in (IndependentWorkerTests,IndependentBrowserTests,CycleTimingTests)]
+                     for kind in (IndependentWorkerTests,IndependentBrowserTests,CycleTimingTests,VenuePagesTests,
+                                  LoginSurfaceTests,EmbeddedLoginBrowserTests)]
         result = unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite([*cases,*cases_backend,*independent]))
         if not result.wasSuccessful():
             raise RuntimeError('Windows 本地验证失败，请查看运行日志')

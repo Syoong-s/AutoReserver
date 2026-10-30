@@ -48,6 +48,7 @@ SJTUReserver/
 │   ├── desktop_controller.py     # 桌面控制器：负责后台调度、状态机流转与跨线程事件通信
 │   ├── workspace.py              # 与图形库无关的工作区状态、候选生成、目标复制与周重复逻辑
 │   ├── multivenue.py             # 多场馆/多场地备选管理、候选优先级匹配与下单流转
+│   ├── venue_pages.py            # 每个任务内有界的场馆标签页复用与独立日历状态
 │   ├── runner.py                 # 预约执行循环、共享限速预算（ReadPacer）与异常退避
 │   ├── repeat.py                 # 按周重复规则调度器与目标自动生成
 │   ├── sjtu.py                   # Playwright 网页自动化驱动、会话登录与官方订单提交对接
@@ -293,3 +294,21 @@ HTTP 401 或页面离开场馆站点会明确要求重新登录；403 停止监�
 普通多场馆监测以整轮为单位计算间隔。每轮依次读取去重后的场馆/日期组合，页面初始化与日期选择归为一次读取动作；场馆之间保持短串行间隔，下一轮按本轮起点加配置间隔和抖动安排。抢购阶段继续使用任务自身的首秒及后续加速窗口，服务器退避仍优先。日志记录轮次、逐场馆结果、汇总与下一次检查时间；瞬时加载和倒计时仅更新状态。`inventories` 进度字段携带全部场馆的结果、关注时段、轮次、检查时间和错误状态，GTK 同时保留各场馆卡片。
 
 本地回归使用 Python 3.14.4、GTK 3.24.52 和 Playwright 1.64.1；Windows 便携包使用固定的 Python 3.14.5、GTK 3.24.52 和 Playwright 1.64.1。没有新增运行时依赖。源代码启动保持 `./start-gui.sh`；发布包使用 Linux `./AutoReserve` 或 Windows `AutoReserve.exe`。本地构建命令为 `python3 tools/release.py --expected-tag v0.16.0` 和 `python3 tools/build_windows.py --expected-tag v0.16.0`。并发与整轮时序用例位于 `tests/test_independent_workers.py`；测试只使用隔离账户目录和本地模拟网页，不访问真实账户。
+
+## v0.16.1：场馆网页复用与检查耗时
+
+多场馆目标在自己的 Chromium 进程内保留最多 4 个场馆标签页，按最近使用顺序回收额外页面；原始页面保留给登录状态保存。每个标签页独立维护适配器、日历刷新时刻、选中状态和失败恢复标记。普通轮次通过原生日期按钮刷新空位，不再因切换场馆重载整个前端。单场馆原本已有的页面复用保持相同策略。首次初始化、日历过期、日期未开放及读取失败仍会触发完整加载；抢购准备时未开放的目标会精确失效对应场馆的日历。每个场馆的读取时长写入执行日志及进度事件的 `read_seconds`。
+
+标签页只缓存网页环境，不缓存本轮空位授权。返回其他场馆下单前再次请求该日期的最新网格；选择、金额核对、抢购时间门、限流退避及共享 SQLite 提交锁继续生效。停止和异常退出关闭额外标签页并移除观察器。超过 4 个场馆仍逐个检查，重新进入已回收的场馆时重新初始化。
+
+本地解释器为 Python 3.14.4，浏览器依赖为 Playwright 1.64.1，界面为 GTK 3.24.52；Windows 包沿用 Python 3.14.5 及原固定运行库。本次不新增依赖、不修改全局环境。源码启动为 `./start-gui.sh`；本地构建为 `python3 tools/release.py --expected-tag v0.16.1` 和 `python3 tools/build_windows.py --expected-tag v0.16.1`。语法检查为 `python -m compileall -q autoreserve scripts tests`；专项回归为 `RUN_BROWSER_TESTS=1 python -m unittest discover -s tests -p test_multivenue.py -v` 和 `python -m unittest discover -s tests -p test_venue_pages.py -v`。加载现有私有运行库的方法见前文与 `docs/VALIDATION.md`。
+
+## v0.17.0：可编辑已完成目标、状态重置与客户端登录
+
+GTK 仅在当前目标运行期间冻结其要求，已完成/失败/待核对的普通目标仍可编辑。保存修改保留原执行结果和订单详情；显式点击顶部“重置目标状态”才调用 `Journal.reset_goal`：通过 `BEGIN IMMEDIATE` 把当前任务行完整归档到 `attempts`，删除该任务的当前占位和状态。重复点击不会重复归档。控制器只清理当前目标的运行缓存/检查次数/通知去重，其他目标及其占位继续有效。重置不取消网站订单，也不写入或丢弃编辑器草稿；用户可保存新要求后重新启动。生成的重复日期实例仍由模板管理。
+
+`login_surface.py` 将真实官方登录页运行在全新 headless Chromium 上下文中，由 `login_dialog.py` 在 GTK transient/modal 子窗口显示。画面通过单个有锁的内存帧缓冲传递，鼠标按下/释放/拖动/滚轮、键盘导航、GTK 输入法提交和显式粘贴通过有界队列送回拥有浏览器的 worker。GTK 主线程从不调用浏览器 API。PNG 只在内存解码到 GtkImage，输入和画面不写入文件或日志，取消后清空缓冲。官方 OAuth 路由取自体育平台公开前端的“校内人员登录”逻辑；账号密码和验证码仍由官方网页处理。
+
+客户端仅在返回体育平台同源且 currentUser 响应含有效身份时自动保存会话。取消或未核验失败保留原会话；网页导航期间的短暂上下文变化允许有界重试。场馆目录不存在时，另开初始化进度窗口；目录读取继续遵守两秒间隔，显示当前场馆及计数。失败后保留已确认的登录，可单独重试初始化；有效目录缓存不触发进度弹窗或网络刷新。
+
+没有新增依赖。Linux 本地测试使用 Python 3.14.4、GTK 3.24.52、Playwright 1.64.1 和 Chromium revision 1248；Windows 沿用 Python 3.14.5 及原固定 GTK/Playwright 运行库。源码启动仍为 `./start-gui.sh`，发布包通过 `AutoReserve` / `AutoReserve.exe` 启动。语法检查为 `python -m compileall -q autoreserve scripts tests`；回归为 `./test.sh`，或在既有私有环境内设置 `RUN_BROWSER_TESTS=1 RUN_GTK_TESTS=1` 后运行 `python -m unittest discover -s tests -v`。打包为 `python3 tools/release.py --expected-tag v0.17.0` 与 `python3 tools/build_windows.py --expected-tag v0.17.0`。

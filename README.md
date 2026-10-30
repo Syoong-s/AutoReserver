@@ -13,7 +13,7 @@ AutoReserve combines a high-performance GTK 3 desktop interface with an automate
 ## Features
 
 - **Native Desktop Interface**: Built with native GTK 3, featuring client-side decorations (CSD), fluid scrolling, keyboard navigation, and adjustable interface font sizes (11–20 px).
-- **Multi-Venue & Court Alternatives**: Add multiple venues, projects, and specific courts under a single goal with user-defined priority ordering. The first available alternative is automatically reserved to fulfill the goal.
+- **Multi-Venue & Court Alternatives**: Add multiple venues, projects, and specific courts under a single goal with user-defined priority ordering. Up to four initialized venue tabs per task avoid repeated full-page loads; each round still requests fresh availability, with calendar reloads when needed and a fresh check before returning to another venue to order. The first available alternative is automatically reserved to fulfill the goal.
 - **Flexible Court & Time Selection**: Choose specific courts or "any available court", with optional support for merging contiguous time slots into a single reservation.
 - **Smart Scheduling & Goal Duplication**: One-click duplication to the following date (`+` button) with independent settings, plus flexible weekly recurring templates (configurable execution weekdays, trigger times, and target date offsets).
 - **High-Precision Timed-Release (Rush) Mode**: Tailored for opening-second slot drops. Includes automated session pre-warming (default 45s lead), server clock drift estimation/compensation, and burst polling (250ms interval) during the opening seconds.
@@ -21,6 +21,7 @@ AutoReserve combines a high-performance GTK 3 desktop interface with an automate
 - **Clear Status & Native Notifications**: Color-coded sidebar badges (monitoring, weekly repeat, pending, completed, attention needed) and non-blocking native popup dialogs displaying full order details upon successful booking.
 - **Safety, Rate Limiting & Duplicate Protection**: Each task has bounded reads and server backoff. A shared atomic SQLite journal prevents overlapping submissions from concurrent browsers and across restarts.
 - **Independent Goals & Order History**: Each goal launches its own Chromium browser and can run concurrently. Save/start/stop act on the selected goal; create or edit other goals while monitors run, with centralized local order history.
+- **Editable Completed Goals**: Edit any stopped ordinary goal, including completed ones. The top **Reset Goal State (重置目标状态)** button archives its result, releases that execution's local submission claims and returns it to pending. Historical website orders remain unchanged; requirement edits alone do not reset execution status.
 - **Template-Owned Executions**: Generated recurring targets appear in the template's **重复执行目标** expander beneath target settings. They keep frozen requirements and cannot start independently. A green dot marks the running template; deleting an execution preserves order history.
 - **Zero-Cloud Privacy**: Credentials, session tokens, configurations, and order journals remain strictly stored on your local machine.
 
@@ -44,7 +45,7 @@ Download the portable archive matching your operating system from the repository
 ### 2. Usage Workflow
 
 1. **Log In**:
-   Click **Log in / re-login (登录 / 重新登录)** in the sidebar. In the opened browser window, log in with your jAccount. After logging in, return to the AutoReserve client and click **Save Login (保存登录)**.
+   Click **Log in / re-login (登录 / 重新登录)**. Complete the official jAccount webpage inside the client's login popup; the verified session is saved automatically. If venue initialization is needed, a separate progress popup shows the current stage and offers retry after failure. Cancelling unconfirmed login preserves the previous session.
 2. **Configure Booking Goals**:
    Click **New Goal (新建预约目标)** in the sidebar and enter a target date. Select a venue, project, court, and desired time slots, then click **Add Venue (加入场馆)**. You can add multiple venues/courts as fallback candidates and adjust their priority using the up/down arrows.
 3. **(Optional) Enable Weekly Recurrence or Rush Mode**:

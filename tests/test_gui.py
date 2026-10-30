@@ -111,10 +111,10 @@ class GuiApiTests(GuiServerFixture, unittest.TestCase):
         caught.exception.close()
 
     # ==========================================
-    # Function: Preserve completed progress across GUI restarts and priority edits.
-    # Method: Arm a real journal record, recreate the controller, and reorder alternatives.
+    # Function: Preserve immutable historical orders while allowing stopped requirement edits.
+    # Method: Recreate the controller and change alternatives without rewriting the previously submitted order details.
     # ==========================================
-    def test_completed_goals_are_locked_and_resumed(self):
+    def test_completed_goals_remain_editable_with_preserved_history(self):
         config = fixture_config()
         goal = config.goals[0]
         goal.candidates.append(replace(goal.candidates[0], court="场地2"))
@@ -129,8 +129,9 @@ class GuiApiTests(GuiServerFixture, unittest.TestCase):
         restarted.save(asdict(config))
         self.assertEqual(restarted.state()["goals"][0]["detail"]["order_id"], "LOCAL-123")
         goal.candidates[0] = replace(goal.candidates[0], court="另一个场地")
-        with self.assertRaises(ValueError):
-            restarted.save(asdict(config))
+        restarted.save(asdict(config))
+        self.assertEqual(restarted.state()['config']['goals'][0]['candidates'][0]['court'],'另一个场地')
+        self.assertEqual(restarted.state()['goals'][0]['detail']['order_id'],'LOCAL-123')
 
     # ==========================================
     # Function: Reject parallel actions and mid-run configuration edits.

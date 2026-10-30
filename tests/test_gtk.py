@@ -28,6 +28,168 @@ from test_catalog import native_config,directory_fixture
 @unittest.skipUnless(os.environ.get('RUN_GTK_TESTS')=='1','设置 RUN_GTK_TESTS=1 启用 GTK 实机测试')
 class GtkWorkspaceTests(unittest.TestCase):
     # ==========================================
+    # Function: Keep completed goals editable and expose a scoped reset action in the actual workbench.
+    # Method: Create a durable order, change native fields, click reset and verify pending state with preserved history/drafts.
+    # ==========================================
+    def test_completed_goal_can_edit_and_reset_from_toolbar(self):
+        app,g=self.app,self.g
+        config=load_config(self.controller.config_path)
+        goal=config.goals[0]
+        journal=Journal(self.path/'auth/journal.sqlite3')
+        journal.arm(config.for_target(goal.candidates[0]),goal.candidates[0],config.goal_key(goal))
+        journal.update(config.goal_key(goal),'submitted',{'order_id':'KEPT-ORDER'})
+        journal.close()
+        app.model.states={s['id']:s for s in self.controller.state()['goals']}
+        app._busy=None
+        app.set_busy()
+        self.assertTrue(g.gtk_widget_get_sensitive(app.name_entry))
+        self.assertTrue(g.gtk_widget_get_sensitive(app.date_entry))
+        g.text(app.name_entry,'已下单也可编辑')
+        app.commit_current()
+        self.assertEqual(app.model.get()['name'],'已下单也可编辑')
+        g.gtk_button_clicked(app.reset_button)
+        app.save_worker.join(2)
+        self.wait_layout(lambda:not app.saving)
+        self.assertEqual(app.model.states[goal.id]['status'],'pending')
+        self.assertEqual(app.model.get()['name'],'已下单也可编辑')
+        self.assertEqual(self.controller.order_history()[0]['detail']['order_id'],'KEPT-ORDER')
+        self.controller.busy,self.controller.operation,self.controller.active_identity=True,'run',goal.id
+        app.set_busy()
+        self.assertFalse(g.gtk_widget_get_sensitive(app.reset_button))
+        self.assertFalse(g.gtk_widget_get_sensitive(app.name_entry))
+        self.controller.busy=False
+
+    # ==========================================
+    # Function: Present an in-client official login child and separate initialization progress with clean cancellation.
+    # Method: Build real GTK surfaces, render a local memory frame and drive progress/error/retry completion events.
+    # ==========================================
+    def test_login_surface_and_directory_progress_native_windows(self):
+        from autoreserve.login_dialog import LoginDialog
+        import struct
+        import zlib
+        app,g=self.app,self.g
+        dialog=LoginDialog(app)
+        self.assertTrue(g.gtk_window_get_modal(dialog.window))
+        self.assertEqual(g.gtk_window_get_transient_for(dialog.window),app.window)
+        self.assertFalse(g.gtk_window_get_resizable(dialog.window))
+
+        # ==========================================
+        # Function: Build a complete benign PNG fixture without another imaging dependency.
+        # Method: Encode standard IHDR/IDAT/IEND chunks with valid CRCs for the real native image decoder.
+        # ==========================================
+        def chunk(kind,data):
+            return struct.pack('!I',len(data))+kind+data+struct.pack('!I',zlib.crc32(kind+data))
+        png=(b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('!2I5B',1,1,8,2,0,0,0))+
+             chunk(b'IDAT',zlib.compress(b'\0\xff\xff\xff'))+chunk(b'IEND',b''))
+        dialog.surface.frame=(png,'local.test')
+        dialog.refresh()
+        self.assertEqual(g.gtk_label_get_text(dialog.caption).decode(),'官方登录 · local.test')
+        self.assertIsNone(dialog.surface.take_frame())
+        dialog.surface.send('text','temporary input')
+        dialog.close()
+        self.assertTrue(dialog.surface.closed.is_set())
+        self.assertTrue(dialog.surface.inputs.empty())
+        replacement=LoginDialog(app)
+        app.login_dialog=replacement
+        self.controller.emit('login_closed',dialog.surface)
+        app.tick()
+        self.assertIs(app.login_dialog,replacement)
+        self.controller.emit('login_closed',replacement.surface)
+        app.tick()
+        self.assertIsNone(app.login_dialog)
+        app.directory_progress({'stage':'start','message':'正在初始化场馆…'})
+        self.assertTrue(g.gtk_widget_get_visible(app.directory_window))
+        app.directory_progress({'stage':'update','message':'首次缓存目录 1/2：本地场馆'})
+        self.assertIn('1/2',g.gtk_label_get_text(app.directory_caption).decode())
+        app.directory_progress({'stage':'error','message':'本地网络中断，登录已保留'})
+        self.assertTrue(g.gtk_widget_get_visible(app.directory_retry))
+        app.directory_progress({'stage':'done','message':'完成'})
+        self.assertIsNone(app.directory_window)
+        app.directory_progress({'stage':'start','message':'初始化'})
+        app.cancel_directory()
+        app.directory_progress({'stage':'update','message':'延迟到达的旧进度'})
+        self.assertIsNone(app.directory_window)
+        app.directory_progress({'stage':'start','message':'重新初始化'})
+        app.directory_progress({'stage':'done','message':'完成'})
+
+    # ==========================================
+    # Function: Complete a real in-client login using native mouse/key event decoding and headless Chromium rendering.
+    # Method: Operate a required-field loopback form through GTK, then require auto-save and a separate initialization popup.
+    # ==========================================
+    @unittest.skipUnless(os.environ.get('RUN_BROWSER_TESTS')=='1','设置 RUN_BROWSER_TESTS=1 启用内嵌登录联测')
+    def test_native_login_interaction_autosaves_and_shows_initialization(self):
+        from http.server import ThreadingHTTPServer
+        from test_login_surface import LoginHandler
+        server=ThreadingHTTPServer(('127.0.0.1',0),LoginHandler)
+        server.calls,server.logged_in=[],False
+        thread=threading.Thread(target=server.serve_forever,daemon=True)
+        thread.start()
+        app,g=self.app,self.g
+        self.no_browser.stop()
+        (self.path/'auth/catalog.json').unlink()
+        self.controller.catalog=None
+        lib=g.libs['gdk']
+        for name,restype,args in [('gdk_event_new',C.c_void_p,[C.c_int]),('gdk_event_free',None,[C.c_void_p])]:
+            function=getattr(lib,name)
+            function.restype,function.argtypes=restype,args
+
+        # ==========================================
+        # Function: Match the public coordinate fields used by GDK's button-event accessors.
+        # Method: Use native pointer-sized members so the same event prefix works on Linux and Windows x64.
+        # ==========================================
+        class Button(C.Structure):
+            _fields_=[('type',C.c_int),('window',C.c_void_p),('send_event',C.c_int8),('time',C.c_uint),
+                      ('x',C.c_double),('y',C.c_double),('axes',C.c_void_p),('state',C.c_uint),('button',C.c_uint)]
+
+        # ==========================================
+        # Function: Match the public key fields used by GDK and GTK input methods.
+        # Method: Initialize only the fixed prefix inside a real GdkEvent allocation.
+        # ==========================================
+        class Key(C.Structure):
+            _fields_=[('type',C.c_int),('window',C.c_void_p),('send_event',C.c_int8),('time',C.c_uint),
+                      ('state',C.c_uint),('keyval',C.c_uint)]
+
+        try:
+            with patch('autoreserve.desktop_controller.HOME_URL',f'http://127.0.0.1:{server.server_port}/'):
+                app.action('login')
+                self.wait_layout(lambda:app.login_dialog and '127.0.0.1' in
+                                 g.gtk_label_get_text(app.login_dialog.caption).decode(),timeout=12)
+                dialog=app.login_dialog
+                self.assertFalse(g.gtk_widget_get_visible(app.w['capture']))
+                for event_type,kind in [(4,'down'),(7,'up')]:
+                    event=lib.gdk_event_new(event_type)
+                    try:
+                        value=C.cast(event,C.POINTER(Button)).contents
+                        value.window=g.g_object_ref(g.gtk_widget_get_window(dialog.events))
+                        value.x,value.y,value.button=60,45,1
+                        dialog.pointer(event,kind)
+                    finally:
+                        lib.gdk_event_free(event)
+                for keyval in [*map(ord,'local-user'),0xff09,*map(ord,'local-test-password'),0xff09,0xff0d]:
+                    event=lib.gdk_event_new(8)
+                    try:
+                        value=C.cast(event,C.POINTER(Key)).contents
+                        value.window=g.g_object_ref(g.gtk_widget_get_window(dialog.events))
+                        value.keyval=keyval
+                        dialog.key(event)
+                    finally:
+                        lib.gdk_event_free(event)
+                self.wait_layout(lambda:app.directory_window is not None,timeout=12)
+                self.assertIsNone(app.login_dialog)
+                self.assertEqual(self.controller.auth_status,'已登录')
+                self.assertTrue((self.path/'auth/session.json').exists())
+                self.wait_layout(lambda:not self.controller.busy,timeout=15)
+                self.wait_layout(lambda:app.directory_window is None)
+                self.assertEqual(self.controller.cache.load()['venues'],directory_fixture()['venues'])
+                self.assertEqual(app.errors,[])
+        finally:
+            self.controller.stop()
+            if self.controller.worker:self.controller.worker.join(5)
+            server.shutdown()
+            server.server_close()
+            thread.join(3)
+
+    # ==========================================
     # Function: Preserve newly created unsaved goals when closing after independent monitors stop.
     # Method: Request close during a run, finish that run and require the ordinary unsaved-changes dialog.
     # ==========================================

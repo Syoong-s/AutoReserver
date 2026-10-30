@@ -32,8 +32,105 @@ class MultiVenueTests(unittest.TestCase):
     browser = fixtures.BrowserTests.browser
 
     # ==========================================
-    # Function: Switch real hash-routed venue pages whose component data is initialized only on document load.
-    # Method: Use two student-center routes on one document URL and require the second venue's fresh stock and one order.
+    # Function: Reuse venue documents while obtaining fresh stock on every warm round.
+    # Method: Scan two sold-out venues three times and count documents, inventory requests and live tabs.
+    # ==========================================
+    def test_warm_rounds_reuse_tabs_and_refresh_each_venue(self):
+        goal = Goal('warm-pages', '保留场馆网页', [self.target_at('A馆', 'soldout'), self.target_at('B馆', 'soldout')])
+        events, documents, reads, tab_counts = [], [], [], []
+        with self.browser(goals=[goal], targets=[], monitor_until_complete=True) as (config, context, page):
+            context.on('request', lambda request: documents.append(request.url) if request.resource_type == 'document'
+                       else reads.append(request.url) if request.url.endswith('/queryFieldSituation') else None)
+
+            # ==========================================
+            # Function: Observe both venue results before ending an ordinary full scan.
+            # Method: Capture live tabs and independent inventory freshness at each round summary.
+            # ==========================================
+            def progress(event):
+                events.append(event)
+                if '本轮已检查 2 个日期/场馆组合' in event['message']:
+                    tab_counts.append(len(context.pages))
+                    self.assertEqual({item['venue'] for item in event['inventories']}, {'A馆', 'B馆'})
+                    self.assertTrue(all(item['status'] == 'checked' and item['read_seconds'] >= 0
+                                        for item in event['inventories']))
+
+            result = run_reservation(page, config, self.journal, self.root/'artifacts', True, progress,
+                                     stop=lambda: sum(e['message'].startswith('等待空位，') for e in events) >= 3)
+            self.assertEqual(result['status'], 'stopped')
+            self.assertEqual(len(documents), 2)
+            self.assertEqual(len(reads), 4)
+            self.assertEqual(tab_counts, [2, 2, 2])
+            self.assertEqual(context.pages, [page])
+            self.assertEqual(self.journal.entries(), [])
+
+    # ==========================================
+    # Function: Keep large multi-venue goals bounded without skipping evicted venues.
+    # Method: Scan five venues twice and require all ten checks while never exceeding four task tabs.
+    # ==========================================
+    def test_many_venues_remain_bounded_and_complete(self):
+        goal = Goal('many-pages', '五个场馆', [self.target_at(name, 'soldout') for name in ('A馆', 'B馆', 'C馆', 'D馆', 'E馆')])
+        events, tab_counts = [], []
+        with self.browser(goals=[goal], targets=[], monitor_until_complete=True) as (config, context, page):
+            context.on('page', lambda _: tab_counts.append(len(context.pages)))
+            result = run_reservation(page, config, self.journal, self.root/'artifacts', True, events.append,
+                                     stop=lambda: sum(e['message'].startswith('等待空位，') for e in events) >= 2)
+            self.assertEqual(result['status'], 'stopped')
+            self.assertEqual(sum(e['message'].startswith('已检查 ') for e in events), 10)
+            self.assertEqual(max(tab_counts), 4)
+            self.assertEqual(context.pages, [page])
+            self.assertEqual(len(events[-1]['inventories']), 5)
+
+    # ==========================================
+    # Function: Refresh expired calendars independently of warm inventory reads.
+    # Method: Expire both cached pages immediately and require new documents in the second round.
+    # ==========================================
+    def test_calendar_expiry_reloads_cached_venues(self):
+        goal = Goal('expired-pages', '日历过期', [self.target_at('A馆', 'soldout'), self.target_at('B馆', 'soldout')])
+        events, documents = [], []
+        with self.browser(goals=[goal], targets=[], monitor_until_complete=True) as (config, context, page):
+            config.calendar_refresh_seconds = 0  # Force expiry only after ordinary configuration validation.
+            context.on('request', lambda request: documents.append(request.url) if request.resource_type == 'document' else None)
+            result = run_reservation(page, config, self.journal, self.root/'artifacts', True, events.append,
+                                     stop=lambda: sum(e['message'].startswith('等待空位，') for e in events) >= 2)
+            self.assertEqual(result['status'], 'stopped')
+            self.assertEqual(len(documents), 4)
+            self.assertEqual(context.pages, [page])
+
+    # ==========================================
+    # Function: Recheck a cached high-priority venue immediately before selecting it.
+    # Method: Sell out A after scanning B and require a native A refresh to prevent submission from its cached grid.
+    # ==========================================
+    def test_cached_venue_is_refreshed_before_order(self):
+        goal = Goal('cached-soldout', '空位已被抢走', [self.target_at('A馆'), self.target_at('B馆', 'soldout')])
+        document = (Path(__file__).resolve().parents[1]/'demo/index.html').read_text()
+        document = document.replace("scenario !== 'soldout'", "scenario !== 'soldout' && !window.resold")
+        events, reads, submits = [], [], []
+        with self.browser(goals=[goal], targets=[], monitor_until_complete=True) as (config, context, page):
+            context.route('**/*', lambda route: route.fulfill(content_type='text/html', body=document)
+                          if route.request.resource_type == 'document' else route.continue_())
+
+            # ==========================================
+            # Function: Change stock only when returning to the first venue for order validation.
+            # Method: Set the fixture's availability flag before completing the native inventory response.
+            # ==========================================
+            def inventory(route):
+                reads.append(route.request.frame.page.url)
+                route.request.frame.page.evaluate('window.resold = true')
+                route.fulfill(content_type='application/json', body='{"code":0,"data":[]}')
+
+            context.route('**/queryFieldSituation', inventory)
+            context.on('request', lambda request: submits.append(request.url) if request.url.endswith('/ConfirmOrder') else None)
+            result = run_reservation(page, config, self.journal, self.root/'artifacts', True, events.append,
+                                     stop=lambda: any(e['message'].startswith('等待空位，') for e in events))
+            self.assertEqual(result['status'], 'stopped')
+            self.assertEqual(len(reads), 1)
+            self.assertIn('venue=A', reads[0])
+            self.assertEqual(submits, [])
+            self.assertEqual(self.journal.entries(), [])
+
+    # ==========================================
+    # Function: Isolate hash-routed venues whose component data is initialized only on document load.
+    # Method: Route every task tab through two student-center fixtures and require the second venue's fresh stock and one order.
     # ==========================================
     def test_hash_route_venue_switch_reloads_document(self):
         url=self.base+'/?scenario=success'
@@ -45,8 +142,8 @@ class MultiVenueTests(unittest.TestCase):
                                   "params.set('scenario',location.hash==='#/north'?'success':'soldout');\nconst scenario = params.get('scenario')")
         events,submits=[],[]
         with self.browser(goals=[goal],targets=[]) as (config,_,page):
-            page.route(url,lambda route:route.fulfill(content_type='text/html',body=document))
-            page.on('request',lambda request:submits.append(page.url) if request.url.endswith('/ConfirmOrder') else None)
+            page.context.route(url,lambda route:route.fulfill(content_type='text/html',body=document))
+            page.context.on('request',lambda request:submits.append(request.frame.page.url) if request.url.endswith('/ConfirmOrder') else None)
             result=run_reservation(page,config,self.journal,self.root/'artifacts',True,events.append)
             self.assertEqual(result['status'],'completed')
             self.assertEqual(result['goals'][0]['detail']['venue'],'北校区学生中心')
@@ -98,7 +195,7 @@ class MultiVenueTests(unittest.TestCase):
         goal = Goal("fallback", "健身", [self.target_at("A馆", "soldout"), self.target_at("B馆")])
         with self.browser(goals=[goal], targets=[], monitor_until_complete=True) as (config, _, page):
             events, submits = [], []
-            page.on("request", lambda r: submits.append(page.url) if r.url.endswith("/ConfirmOrder") else None)
+            page.context.on("request", lambda r: submits.append(r.frame.page.url) if r.url.endswith("/ConfirmOrder") else None)
             result = run_reservation(page, config, self.journal, self.root / "artifacts", True, events.append)
             self.assertEqual(result["status"], "completed")
             self.assertEqual(result["goals"][0]["detail"]["venue"], "B馆")
@@ -113,7 +210,7 @@ class MultiVenueTests(unittest.TestCase):
         goal = Goal("priority", "择优", [self.target_at("A馆"), self.target_at("B馆", sport="羽毛球")])
         with self.browser(goals=[goal], targets=[]) as (config, _, page):
             submits = []
-            page.on("request", lambda r: submits.append(r.url) if r.url.endswith("/ConfirmOrder") else None)
+            page.context.on("request", lambda r: submits.append(r.url) if r.url.endswith("/ConfirmOrder") else None)
             result = run_reservation(page, config, self.journal, self.root / "artifacts", True)
             self.assertEqual(result["status"], "completed")
             self.assertEqual(result["goals"][0]["detail"]["venue"], "A馆")
@@ -142,7 +239,7 @@ class MultiVenueTests(unittest.TestCase):
         goals = [Goal("first", "第一个", [a, b]), Goal("second", "第二个", [a, b])]
         with self.browser(goals=goals, targets=[], monitor_until_complete=True) as (config, _, page):
             events, submits = [], []
-            page.on("request", lambda r: submits.append(page.url) if r.url.endswith("/ConfirmOrder") else None)
+            page.context.on("request", lambda r: submits.append(r.frame.page.url) if r.url.endswith("/ConfirmOrder") else None)
             result = run_reservation(page, config, self.journal, self.root / "artifacts", True, events.append)
             self.assertEqual(result["status"], "completed")
             self.assertEqual([g["detail"]["venue"] for g in result["goals"]], ["A馆", "B馆"])
@@ -198,7 +295,7 @@ class MultiVenueTests(unittest.TestCase):
         def browser(*args,**kwargs):
             with open_browser(*args,**kwargs) as (context,page):
                 pages.append(page)
-                page.on('request',lambda request:submits.append(request.url) if request.url.endswith('/ConfirmOrder') else None)
+                page.context.on('request',lambda request:submits.append(request.url) if request.url.endswith('/ConfirmOrder') else None)
                 yield context,page
 
         # ==========================================
@@ -241,7 +338,7 @@ class MultiVenueTests(unittest.TestCase):
                 route.fulfill(status=429 if len(calls) == 1 else 200,
                               headers={"retry-after": "120", "content-type": "application/json"}, body='{"code":0,"data":[]}')
 
-            page.route("**/manage/fieldDetail/queryFieldSituation", inventory)
+            page.context.route("**/manage/fieldDetail/queryFieldSituation", inventory)
             result = run_reservation(page, config, self.journal, self.root / "artifacts", True, events.append)
             self.assertEqual(result["status"], "completed")
             self.assertTrue(any(e["monitor"]["cooling_down"] and "120" in e["monitor"]["reason"] for e in events))
@@ -254,9 +351,9 @@ class MultiVenueTests(unittest.TestCase):
     def test_403_at_one_venue_pauses_all_orders(self):
         goal = Goal("denied", "拒绝访问", [self.target_at("A馆"), self.target_at("B馆")])
         with self.browser(goals=[goal], targets=[]) as (config, _, page):
-            page.route("**/*venue=B*", lambda route: route.fulfill(status=403, body="Forbidden"))
+            page.context.route("**/*venue=B*", lambda route: route.fulfill(status=403, body="Forbidden"))
             submits = []
-            page.on("request", lambda r: submits.append(r.url) if r.url.endswith("/ConfirmOrder") else None)
+            page.context.on("request", lambda r: submits.append(r.url) if r.url.endswith("/ConfirmOrder") else None)
             result = run_reservation(page, config, self.journal, self.root / "artifacts", True)
             self.assertEqual(result["status"], "access_limited")
             self.assertEqual(submits, [])
@@ -269,7 +366,7 @@ class MultiVenueTests(unittest.TestCase):
         goal = Goal("unknown", "需核对", [self.target_at("A馆", "missing-id"), self.target_at("B馆")])
         with self.browser(goals=[goal], targets=[], monitor_until_complete=True) as (config, _, page):
             events, submits = [], []
-            page.on("request", lambda r: submits.append(r.url) if r.url.endswith("/ConfirmOrder") else None)
+            page.context.on("request", lambda r: submits.append(r.url) if r.url.endswith("/ConfirmOrder") else None)
             result = run_reservation(page, config, self.journal, self.root / "artifacts", True, events.append)
             self.assertEqual(result["status"], "needs_attention")
             self.assertEqual(len(submits), 1)
@@ -295,7 +392,7 @@ class MultiVenueTests(unittest.TestCase):
 
         with self.browser(goals=[goal], targets=[], monitor_until_complete=True) as (config, _, page):
             submits = []
-            page.on("request", lambda r: submits.append(r.url) if r.url.endswith("/ConfirmOrder") else None)
+            page.context.on("request", lambda r: submits.append(r.url) if r.url.endswith("/ConfirmOrder") else None)
             with patch.object(SjtuPage, "prepare_submit", delayed):
                 result = run_reservation(page, config, self.journal, self.root / "artifacts", True)
             self.assertEqual(result["status"], "completed")
@@ -382,7 +479,7 @@ class MultiVenueTests(unittest.TestCase):
             run_reservation(page, config, self.journal, self.root / "first", True)
             goal.candidates.reverse()
             requests = []
-            page.on("request", lambda request: requests.append(request.url))
+            page.context.on("request", lambda request: requests.append(request.url))
             result = run_reservation(page, config, self.journal, self.root / "second", True)
             self.assertEqual(result["status"], "completed")
             self.assertEqual(requests, [])
@@ -400,7 +497,7 @@ class MultiVenueTests(unittest.TestCase):
         events = []
         with self.browser(goals=[], targets=[], repeat_rules=[rule]) as (config, _, page):
             requests = []
-            page.on("request", lambda request: requests.append(request.url))
+            page.context.on("request", lambda request: requests.append(request.url))
             with patch("autoreserve.repeat.datetime") as clock, patch("autoreserve.multivenue.datetime") as monitor_clock:
                 clock.now.return_value = monitor_clock.now.return_value = now
                 result = run_reservation(page, config, self.journal, self.root / "artifacts", True, events.append,
@@ -423,7 +520,7 @@ class MultiVenueTests(unittest.TestCase):
         events = []
         with self.browser(goals=[], targets=[], repeat_rules=[rule]) as (config, _, page):
             requests = []
-            page.on("request", lambda request: requests.append(request.url))
+            page.context.on("request", lambda request: requests.append(request.url))
             with patch("autoreserve.repeat.datetime") as clock, patch("autoreserve.multivenue.datetime") as monitor_clock:
                 clock.now.return_value = monitor_clock.now.return_value = now
                 result = run_reservation(page, config, self.journal, self.root / "weekly", True, events.append,

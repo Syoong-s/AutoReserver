@@ -58,10 +58,10 @@ def require_playwright():
 
 # ==========================================
 # Function: Open a fresh manual login or reuse saved authentication for monitoring.
-# Method: Restore consistent paired login files without holding their brief disk lock during browser API calls.
+# Method: Restore paired session files and optionally render fresh official login in a private headless GTK surface.
 # ==========================================
 @contextmanager
-def open_browser(config, auth_dir, login=False):
+def open_browser(config, auth_dir, login=False, login_surface=None):
     sync_playwright = require_playwright()
     auth_dir = Path(auth_dir)
     state_path = auth_dir / "storage.json"
@@ -86,9 +86,11 @@ def open_browser(config, auth_dir, login=False):
         if font_config.is_file():
             launch_env["FONTCONFIG_FILE"] = str(font_config)
         browser = playwright.chromium.launch(
-            headless=False if login else config.headless, executable_path=executable, env=launch_env,
+            headless=login_surface is not None if login else config.headless, executable_path=executable, env=launch_env,
         )
         options = {"viewport": {"width": 1440, "height": 1050}, "locale": "zh-CN", "timezone_id": config.timezone}
+        if login_surface is not None:
+            options['viewport'] = {'width':login_surface.width, 'height':login_surface.height}
         with _SESSION_FILES_LOCK:
             storage=json.loads(state_path.read_text(encoding='utf-8')) if not login and state_path.exists() else None
             saved=json.loads(session_path.read_text(encoding='utf-8')) if not login and session_path.exists() else None

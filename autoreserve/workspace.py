@@ -71,8 +71,8 @@ class Workspace:
         return datetime.now(ZoneInfo(self.data['timezone'])).date()
 
     # ==========================================
-    # Function: Protect dated order requirements from accidental editing.
-    # Method: Freeze generated occurrences and recorded one-time goals while leaving templates editable when idle.
+    # Function: Allow stopped goals to be edited independently of their previous result.
+    # Method: Keep only template-owned generated occurrences outside the independent editor.
     # ==========================================
     def editable(self, identity=None):
         identity = identity or self.selected
@@ -80,8 +80,6 @@ class Workspace:
             raise ValueError('请先选择或新建一个预约目标')
         if self.get(identity).get('repeat_id'):
             raise ValueError('重复执行目标由模板管理，请修改重复模板')
-        if not self.repeating(identity) and self.states.get(identity, {}).get('status', 'pending') not in {'pending', 'preview'}:
-            raise ValueError('此目标已有执行记录，请使用 + 创建下一天目标')
 
     # ==========================================
     # Function: Return a dated goal's date or the next expected weekly booking date.

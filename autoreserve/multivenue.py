@@ -1,4 +1,4 @@
-"""Prioritized cross-venue goals sharing one browser and one account read budget."""
+"""Prioritized cross-venue goals sharing one browser and one task read budget."""
 
 from dataclasses import replace
 from datetime import datetime
@@ -12,6 +12,7 @@ from .repeat import materialize_daily, next_daily
 from .runner import attention_message, evidence, submit_once, wait_for_start
 from .sjtu import GridNotReady, SjtuPage, candidate_cells, expand_candidates
 from .rush import RushBoundary, RushCoordinator
+from .venue_pages import VenuePages
 
 
 # ==========================================
@@ -25,7 +26,7 @@ def target_context(config, target):
 
 # ==========================================
 # Function: Monitor all dates and alternative venues before choosing one order per goal.
-# Method: Freshly load hash-routed venues, isolate failed reads and share scoped snapshots under one account limiter.
+# Method: Retain task-local venue tabs, refresh stock every round and share scoped snapshots under one task limiter.
 # ==========================================
 def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pacer, refresh=None, prepare_auth=None):
     stop = stop or (lambda: False)
@@ -70,6 +71,9 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
     sync_daily()
     recurring = submit and any(r.enabled for r in config.repeat_rules)
     current_context, site, effective = None, None, None
+    original_page = page
+    pages = VenuePages(page, config, pacer)
+    current_entry = None
     needs_load, selected_dirty, seed = True, False, None
     last_calendar = 0
     unopened_dates = set()
@@ -163,15 +167,34 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
                 and 0 < timing.deadline(g) - pacer.clock() <= guard_seconds]
 
     # ==========================================
-    # Function: Load a venue/project only when switching or recovering requires it.
-    # Method: Replace scoped observers and force a fresh document when venue routes reuse the same hash-based application.
+    # Function: Switch venues without discarding their initialized application and calendar.
+    # Method: Save the outgoing page's private freshness flags and restore the incoming tab's state.
+    # ==========================================
+    def activate(context):
+        nonlocal page, current_context, current_entry, site, effective, needs_load, selected_dirty, last_calendar
+        if current_context == context and not page.is_closed():
+            return
+        if current_entry is not None:
+            current_entry.site, current_entry.effective = site, effective
+            current_entry.needs_load, current_entry.selected_dirty = needs_load, selected_dirty
+            current_entry.calendar_at = last_calendar
+        current_entry = pages.get(context)
+        page, site, effective = current_entry.page, current_entry.site, current_entry.effective
+        needs_load, selected_dirty = current_entry.needs_load, current_entry.selected_dirty
+        last_calendar, current_context = current_entry.calendar_at, context
+
+    # ==========================================
+    # Function: Load a venue/project only when initializing, refreshing its calendar or recovering.
+    # Method: Preserve other venue tabs and force a fresh document for the selected hash-routed application.
     # ==========================================
     def load(context):
         nonlocal current_context, site, effective, selected_dirty, last_calendar
+        activate(context)
         if site is not None:
             site.close()
         effective = replace(config, booking_url=context[0], venue=context[1], sport=context[2], goals=[])
         site = SjtuPage(page, effective, stop)
+        current_entry.site = site
         current_context = context
         last_calendar=time.monotonic()
         navigate_booking(page,effective.booking_url)
@@ -193,11 +216,12 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
 
     # ==========================================
     # Function: Read one venue/date as one paced action without paying a full monitoring interval for navigation and date selection.
-    # Method: Load the correct document when needed, then choose the date and wait for its native request chain.
+    # Method: Reuse each venue's initialized document but always refresh its date through the native request chain.
     # ==========================================
     def read_group(context, day):
         nonlocal needs_load
-        fresh=(current_context!=context or needs_load or (context,day) in unopened_dates
+        activate(context)
+        fresh=(needs_load or (context,day) in unopened_dates
                or time.monotonic()-last_calendar>=config.calendar_refresh_seconds)
         if fresh:
             shot=load(context)
@@ -242,7 +266,7 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
 
     if not recurring and all(s["status"] == "submitted" for s in states.values()):
         return finish("completed", "全部目标已有成功订单，无需重复预约")
-    page.on("response", pacer.observe)
+    original_page.on("response", pacer.observe)
     try:
         publish("当前任务已启动 · 将按整轮检查所有场馆")
         if submit and config.start_at and not has_rush:
@@ -301,9 +325,13 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
                         continue
                     pending.sort(key=lambda g: not (g.rush.enabled and timing.state(g)['stage'] in {'首秒加速', '短时加速'}))
                     if any(g.rush.enabled and timing.prepared.get(g.id, {}).get('date_open') is False for g in pending):
-                        needs_load = True
                         for goal in pending:
-                            if goal.id in timing.prepared:
+                            if goal.rush.enabled and timing.prepared.get(goal.id, {}).get('date_open') is False:
+                                context = target_context(config, goal.candidates[0])
+                                if context in pages.entries:
+                                    pages.entries[context].needs_load = True
+                                if current_context == context:
+                                    needs_load = True
                                 timing.prepared[goal.id]['date_open'] = True
                 if not pending:
                     if recurring:
@@ -338,7 +366,9 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
                     item=inventories[(context,day)]
                     item.update(status='loading',message='本轮读取中')
                     publish(f'第 {cycle_number} 轮 · 正在读取 {context[1]} / {context[2]} / {day}',log=False)
+                    read_started = time.monotonic()
                     shot=read(lambda context=context,day=day:read_group(context,day))
+                    item['read_seconds'] = round(time.monotonic() - read_started, 3)
                     if shot is None:
                         needs_load,read_failed=True,True
                         item.update(status='error',message=str(last_read_error or '读取未完成'))
@@ -361,7 +391,7 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
                         if any((target_context(config,t),t.date)==(context,day) for t in goal.candidates):
                             states[goal.id].update(last_checked_at=checked,watch_state='monitoring',
                                                    check_count=states[goal.id]['check_count']+1)
-                    publish(f"已检查 {context[1]} / {context[2]} / {day} · 第 {cycle_number} 轮",
+                    publish(f"已检查 {context[1]} / {context[2]} / {day} · 第 {cycle_number} 轮 · 耗时 {item['read_seconds']:.2f} 秒",
                             None if shot.get('date_not_open') else shot)
                     rushed=[g for g in pending if g.rush.enabled]
                     if submit and rushed and best(rushed[0],snapshots) is not None:
@@ -386,9 +416,13 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
                                 break
                             attempted.add(context)
                             try:
-                                if current_context != context or needs_load:
+                                switched = current_context != context
+                                activate(context)
+                                if needs_load:
                                     current = read(lambda context=context: load(context))
                                     needs_load = current is None
+                                elif switched:
+                                    current = read(lambda day=day: date_read(day))
                                 else:
                                     current = site.loaded_snapshot(expected_sport=effective.sport)
                                 if current is not None and (current["active_date"] != day or selected_dirty):
@@ -398,6 +432,8 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
                                     break
                                 snapshots[(context, day)] = current
                                 target = best(goal, snapshots, restricted=context)
+                                if target is not None and not config.headless:
+                                    page.bring_to_front()
                                 if target is None or not site.select(target):
                                     target = best(goal, snapshots)
                                     continue
@@ -452,6 +488,5 @@ def run_multivenue(page, config, journal, artifacts, submit, progress, stop, pac
     finally:
         if pacer._in_cycle:
             pacer.end_cycle()
-        if site is not None:
-            site.close()
-        page.remove_listener("response", pacer.observe)
+        pages.close()
+        original_page.remove_listener("response", pacer.observe)

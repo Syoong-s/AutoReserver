@@ -45,6 +45,7 @@ class DesktopController(Controller):
         self.goal_ids = set()
         self._parent = None
         self.last_run_identity = None
+        self.login_surface = None
         self.merge_workspace()
         journal = Journal(self.auth_dir / "journal.sqlite3")
         try:
@@ -290,6 +291,29 @@ class DesktopController(Controller):
             self.log('新任务默认执行参数已保存，运行中的任务保持原配置')
 
     # ==========================================
+    # Function: Return one stopped ordinary goal to its initial execution state.
+    # Method: Archive its order, release its own claims and discard only its scoped transient worker state.
+    # ==========================================
+    def reset_goal(self, identity):
+        with self.lock:
+            if self.maintenance_busy() or self.is_running(identity):
+                raise ValueError('请先停止当前目标，再重置状态')
+            config = load_config(self.config_path)
+            goal = next((g for g in config.goals if g.id == identity), None)
+            if goal is None or goal.repeat_id:
+                raise ValueError('请选择已保存的普通目标；重复执行目标由模板管理')
+            journal = Journal(self.auth_dir/'journal.sqlite3')
+            try:
+                journal.reset_goal(config.goal_key(goal))
+            finally:
+                journal.close()
+            self.live_goals = [g for g in self.live_goals if g['id'] != identity]
+            self.runs.pop(identity, None)
+            self._completed_seen.difference_update({value for value in self._completed_seen if value[0] == identity})
+            self.log('目标状态已重置，可重新监测；历史订单保留，网站订单未取消', identity=identity)
+            return self.state()['goals']
+
+    # ==========================================
     # Function: Remove a target and all owned local progress while retaining every order record.
     # Method: Persist scoped removal, suppress deleted daily occurrences and scrub only known goal-owned files.
     # ==========================================
@@ -421,7 +445,7 @@ class DesktopController(Controller):
     # Function: Start an explicitly authorized login, metadata read, or selected-goal monitoring session.
     # Method: Capture the selected identity before worker launch and name the scoped goal explicitly in its activity log.
     # ==========================================
-    def start(self, operation, date=None, goal_id=None):
+    def start(self, operation, date=None, goal_id=None, login_surface=None):
         if operation not in {"login", "catalog", "run"}:
             raise ValueError("客户端仅在启动监测后读取空位")
         with self.lock:
@@ -460,6 +484,8 @@ class DesktopController(Controller):
                         record = journal.record(config.goal_key(goal))
                         if record and record['status']=='rejected':
                             continue
+                        if record:
+                            raise ValueError('当前目标已有执行结果，请先点击顶部「重置目标状态」再监测；原记录保留在「历史订单」')
                         conflicts = []
                         for target in goal.candidates:
                             if target.court==ANY_COURT:
@@ -476,6 +502,8 @@ class DesktopController(Controller):
                 self.launch_goal(goal_id,config)
                 return
             self.busy, self.operation, self.result = True, operation, None
+            if operation == 'login':
+                self.login_surface = login_surface
             self.active_identity = goal_id if operation=='run' else None
             if operation=='run':
                 self.last_run_identity = self.active_identity
@@ -495,7 +523,7 @@ class DesktopController(Controller):
 
     # ==========================================
     # Function: Obtain the directory once with paced, cancelable metadata reads.
-    # Method: Recheck the cache under the account lock and never invoke an inventory endpoint.
+    # Method: Report uncached initialization through a dedicated progress channel without reading any inventory.
     # ==========================================
     def ensure_directory(self, page, client):
         last_read = [time.monotonic()]
@@ -521,15 +549,47 @@ class DesktopController(Controller):
             finally:
                 last_read[0] = time.monotonic()
 
-        self.catalog = self.cache.ensure(fetch, wait, self.log, self.stop_event.is_set)
+        initializing = self.cache.load() is None
+
+        # ==========================================
+        # Function: Report metadata initialization in both activity and its native progress popup.
+        # Method: Keep progress messages free of account/session data and send only plain UI events.
+        # ==========================================
+        def progress(message):
+            self.log(message)
+            if initializing:
+                self.emit('directory_progress',{'stage':'update','message':message})
+        if initializing:
+            self.emit('directory_progress',{'stage':'start','message':'正在初始化场馆和运动项目…'})
+        try:
+            self.catalog = self.cache.ensure(fetch, wait, progress, self.stop_event.is_set)
+        except Exception as exc:
+            if initializing:
+                self.emit('directory_progress',{'stage':'cancelled' if isinstance(exc,InterruptedError) else 'error','message':str(exc)})
+            raise
+        if initializing:
+            self.emit('directory_progress',{'stage':'done','message':'场馆初始化完成'})
         self.emit("catalog", self.catalog)
         self.log(f"目录已缓存：{len(self.catalog['venues'])} 个场馆；以后启动和切换均从本机读取")
 
     # ==========================================
     # Function: Save authentication from the homepage without requiring a booking page.
-    # Method: Validate currentUser in a fresh context before replacing saved authentication.
+    # Method: Automatically verify the embedded official callback while retaining the legacy explicit capture path.
     # ==========================================
     def homepage_login(self, context, page, client):
+        if self.login_surface is not None:
+            from .login_surface import await_login
+            await_login(page,self.login_surface,self.stop_event.is_set,HOME_URL)
+            if self.stop_event.is_set() or self.login_surface.closed.is_set():
+                raise InterruptedError('登录已取消，原有登录保留')
+            save_session(context,page,self.auth_dir,origin_of(HOME_URL))
+            self.auth_status='已登录'
+            self.emit('auth',self.auth_status)
+            self.emit('login_complete',self.login_surface)
+            self.login_surface.close()
+            self.log('登录成功，会话已自动保存')
+            self.ensure_directory(page,client)
+            return
         self.log("已打开全新登录窗口，不载入旧登录标记；在网站完成登录后点击客户端“保存登录”")
         while not self.stop_event.is_set() and not page.is_closed():
             if self.capture_event.is_set():
@@ -641,12 +701,16 @@ class DesktopController(Controller):
                     self.catalog = self.cache.load()
                     self.emit("catalog", self.catalog)
                     return
+                if operation == 'catalog':
+                    self.emit('directory_progress',{'stage':'start','message':'正在验证登录并加载场馆目录…'})
                 browser_config = replace(config, headless=True) if operation == "catalog" else config
-                with open_browser(browser_config, self.auth_dir, login=operation == "login") as (context, page):
+                surface=self.login_surface if operation=='login' else None
+                with open_browser(browser_config, self.auth_dir, login=operation == "login",login_surface=surface) as (context, page):
                     try:
                         if operation != "run":
                             block_availability(page)
-                        page.goto(HOME_URL, wait_until="domcontentloaded")
+                        from .login_surface import login_url
+                        page.goto(login_url(HOME_URL) if surface is not None else HOME_URL, wait_until="domcontentloaded")
                         client = DirectoryClient(page, stop=self.stop_event.is_set, progress=self.log)
                         if operation == "login":
                             self.homepage_login(context, page, client)
@@ -658,18 +722,25 @@ class DesktopController(Controller):
                             if not page.is_closed() and origin_of(page.url) == origin_of(HOME_URL):
                                 save_session(context, page, self.auth_dir, origin_of(HOME_URL))
                     except Exception as exc:
-                        if not isinstance(exc, InterruptedError):
+                        if not isinstance(exc, InterruptedError) and surface is None:
                             evidence(page, artifacts, {"status": "error", "message": str(exc)})
                         raise
         except InterruptedError as exc:
+            if operation=='catalog':
+                self.emit('directory_progress',{'stage':'cancelled','message':str(exc)})
             self.log(str(exc))
         except Exception as exc:
+            if operation=='catalog' and self.cache.load() is None:
+                self.emit('directory_progress',{'stage':'error','message':str(exc)})
             if isinstance(exc, LoginRequired):
                 self.auth_status = "登录已失效，请重新登录"
                 self.emit("auth", self.auth_status)
             self.result = {"status": "error", "message": str(exc)}
             self.log(f"需要处理：{exc}")
         finally:
+            if operation=='login' and self.login_surface is not None:
+                self.login_surface.close()
+                self.emit('login_closed',self.login_surface)
             with self.lock:
                 self.busy, self.operation = False, "idle"
             try:

@@ -98,15 +98,17 @@ class WorkspaceEditorTests(unittest.TestCase):
         self.assertEqual(model.get(),source)
 
     # ==========================================
-    # Function: Preserve durable goal requirements while permitting independent copies.
-    # Method: Mark a source submitted, reject requirement edits, allow copies and permit independent removal.
+    # Function: Permit editing stopped completed goals without implicitly resetting their result.
+    # Method: Change a submitted source's requirements, retain its state, and verify copying/removal still work.
     # ==========================================
-    def test_recorded_goals_are_immutable_but_copyable(self):
+    def test_recorded_goals_remain_editable_and_copyable(self):
         model=self.model
         source=model.selected
         model.states[source]={'status':'submitted'}
-        with self.assertRaises(ValueError):
-            model.metadata('改写','2030-01-01')
+        model.metadata('改写','2030-01-01')
+        self.assertEqual(model.get()['name'],'改写')
+        self.assertEqual(model.get()['candidates'][0]['date'],'2030-01-01')
+        self.assertEqual(model.states[source]['status'],'submitted')
         model.copy_next(source)
         self.assertEqual(len(model.data['goals']),2)
         model.remove(source)

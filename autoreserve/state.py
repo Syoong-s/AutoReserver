@@ -171,6 +171,24 @@ class Journal:
             self.db.execute("DELETE FROM tasks WHERE task_key=?", (task_key,))
 
     # ==========================================
+    # Function: Explicitly reset one execution without deleting its historical order.
+    # Method: Archive its immutable result and release only its own active submission and slot claims in one transaction.
+    # ==========================================
+    def reset_goal(self, task_key):
+        try:
+            self.db.execute('BEGIN IMMEDIATE')
+            row = self.db.execute('SELECT * FROM tasks WHERE task_key=?', (task_key,)).fetchone()
+            if row:
+                self.db.execute('INSERT INTO attempts VALUES (?, ?, ?, ?)', row)
+                self.db.execute('DELETE FROM slots WHERE task_key=?', (task_key,))
+                self.db.execute('DELETE FROM tasks WHERE task_key=?', (task_key,))
+            self.db.commit()
+            return row is not None
+        except BaseException:
+            self.db.rollback()
+            raise
+
+    # ==========================================
     # Function: Preserve legacy single-order progress when opening the GUI.
     # Method: Rename the task key and its slot ownership in one transaction.
     # ==========================================

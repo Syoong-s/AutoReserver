@@ -25,6 +25,61 @@ from test_catalog import native_config
 # ==========================================
 class GoalActionTests(unittest.TestCase):
     # ==========================================
+    # Function: Edit a completed goal and explicitly reset it without deleting its immutable order history.
+    # Method: Save changed requirements, reset twice, then verify pending startup and exactly one archived original order.
+    # ==========================================
+    def test_completed_goal_edit_reset_preserves_order_and_allows_restart(self):
+        first=self.config.goals[0]
+        key=self.order(first)
+        self.model.states[first.id]={'status':'submitted'}
+        self.model.metadata('修改后的目标',(datetime.now(ZoneInfo(self.config.timezone)).date()+timedelta(days=3)).isoformat())
+        self.controller.save_goal(self.model.payload(first.id),first.id)
+        before=self.controller.order_history()[0]
+        self.assertEqual(before['detail']['date'],first.candidates[0].date)
+        self.assertEqual(self.controller.state()['goals'][0]['status'],'submitted')
+        private_json(self.root/'auth/session.json',{})
+        with patch('autoreserve.desktop_controller.threading.Thread') as thread:
+            with self.assertRaisesRegex(ValueError,'重置目标状态'):
+                self.controller.start('run',goal_id=first.id)
+            thread.assert_not_called()
+        states=self.controller.reset_goal(first.id)
+        self.assertEqual(next(s for s in states if s['id']==first.id)['status'],'pending')
+        history=self.controller.order_history()
+        self.assertEqual(len(history),1)
+        self.assertTrue(history[0]['entry_id'].startswith('attempt:'))
+        self.assertEqual(history[0]['detail'],before['detail'])
+        self.controller.reset_goal(first.id)
+        self.assertEqual(len(self.controller.order_history()),1)
+        private_json(self.root/'auth/session.json',{})
+        with patch('autoreserve.desktop_controller.threading.Thread') as thread:
+            self.controller.start('run',goal_id=first.id)
+            self.assertEqual(thread.call_args.kwargs['args'][1].goals[0].name,'修改后的目标')
+
+    # ==========================================
+    # Function: Reset only the selected task's submission claims while preserving another task's execution.
+    # Method: Mark B as running, reset A, then verify B's journal, slot guard, live state and cancellation event are untouched.
+    # ==========================================
+    def test_reset_is_scoped_and_running_goal_is_rejected(self):
+        first,second=self.config.goals
+        self.order(first)
+        second_key=self.order(second)
+        worker=Mock(busy=True,goal_ids={second.id})
+        self.controller.runs[second.id]=worker
+        self.controller.busy,self.controller.operation=True,'run'
+        with self.assertRaisesRegex(ValueError,'停止'):
+            self.controller.reset_goal(second.id)
+        self.controller.reset_goal(first.id)
+        journal=Journal(self.root/'auth/journal.sqlite3')
+        try:
+            self.assertIsNotNone(journal.record(second_key))
+            journal.ensure_new(self.config.for_target(first.candidates[0]),'retry-first')
+            with self.assertRaises(RuntimeError):
+                journal.ensure_new(self.config.for_target(second.candidates[0]),'retry-second')
+        finally:
+            journal.close()
+        worker.stop_event.set.assert_not_called()
+
+    # ==========================================
     # Function: Keep recurring occurrences owned by their template and reject independent execution or editing.
     # Method: Exercise actual sidebar projection, durable controller guards and history deletion without a browser.
     # ==========================================

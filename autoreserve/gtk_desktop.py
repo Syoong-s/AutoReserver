@@ -47,6 +47,9 @@ class GtkDesktop:
         self.loading = self.saving = self.closing = self.destroyed = False
         self.settings_window = self.notice_window = self.confirm_window = None
         self.history_window = None
+        self.login_dialog = None
+        self.directory_window = self.directory_caption = self.directory_spinner = None
+        self.directory_dismissed = False
         self.history_records,self.history_delete_buttons = [],[]
         self.history_generation,self.history_page = 0,0
         self.settings_fields, self.notices, self.errors = {}, {}, []
@@ -216,6 +219,8 @@ class GtkDesktop:
         top=self.box()
         self.pack(card,top)
         self.mode=self.pack(top,self.label('普通目标 · 单次预约','mode'),True)
+        self.reset_button=self.pack(top,self.button('重置目标状态',self.reset_goal))
+        g.gtk_widget_set_tooltip_text(self.reset_button,'恢复为待启动并允许重新执行；保留历史订单，不取消网站订单'.encode())
         self.pack(top,self.label('抢购模式','caption'))
         self.rush_switch=g.gtk_switch_new()
         self.pack(top,self.rush_switch)
@@ -665,7 +670,7 @@ class GtkDesktop:
 
     # ==========================================
     # Function: Commit valid local entry changes without rereading disk.
-    # Method: Keep recorded goals immutable and update only changed sidebar captions.
+    # Method: Allow stopped goals to change while updating only changed sidebar captions.
     # ==========================================
     def metadata_changed(self):
         if self.loading or self.controller.is_running(self.model.selected) or self.saving or not self.model.get():
@@ -1073,12 +1078,10 @@ class GtkDesktop:
 
     # ==========================================
     # Function: Persist current entry values into the pure local editor model.
-    # Method: Protect recorded targets and apply weekly controls only for templates.
+    # Method: Freeze only running targets and apply weekly controls only for templates.
     # ==========================================
     def commit_current(self):
         if self.loading or self.controller.is_running(self.model.selected) or self.saving or not self.model.get():
-            return
-        if not self.model.repeating() and self.model.states.get(self.model.selected,{}).get('status','pending') not in {'pending','preview'}:
             return
         self.model.metadata(self.g.text(self.name_entry),self.g.text(self.date_entry))
         if self.model.repeating():
@@ -1288,14 +1291,15 @@ class GtkDesktop:
         current=self.controller.is_running(self.model.selected)
         busy=maintenance or current or self.saving
         any_busy=self.controller.busy
-        recorded=not self.model.repeating() and self.model.states.get(self.model.selected,{}).get('status','pending') not in {'pending','preview'}
-        signature=(busy,any_busy,self.model.selected,recorded,self._court_scope,len(self.sidebar_rows),
+        signature=(busy,any_busy,self.model.selected,self._court_scope,len(self.sidebar_rows),
                    tuple((key,self.controller.is_running(key)) for key in self.sidebar_rows))
         if signature==self._busy:
             return
         self._busy=signature
         self.render_inventory(self.snapshot)
-        editable=not busy and not recorded and self.model.get() is not None
+        editable=not busy and self.model.get() is not None
+        g.gtk_widget_set_visible(self.reset_button,not self.model.repeating())
+        g.gtk_widget_set_sensitive(self.reset_button,editable and any(g['id']==self.model.selected for g in self.model.baseline['goals']))
         for widget in [*self.edit_controls,*self.court_buttons.values(),*self.hour_buttons.values(),self.name_entry]:
             g.gtk_widget_set_sensitive(widget,editable)
         g.gtk_widget_set_sensitive(self.date_entry,editable and not self.model.repeating())
@@ -1312,11 +1316,35 @@ class GtkDesktop:
         for key,(row,name,detail,plus,delete) in self.sidebar_rows.items():
             g.gtk_widget_set_sensitive(plus,not maintenance and not self.saving)
             g.gtk_widget_set_sensitive(delete,not self.controller.is_running(key) and not maintenance and not self.saving)
-        g.gtk_widget_set_visible(self.w['capture'],maintenance and self.controller.operation=='login')
+        g.gtk_widget_set_visible(self.w['capture'],maintenance and self.controller.operation=='login' and self.controller.login_surface is None)
         g.gtk_widget_set_visible(self.w['stop'],current)
         self.paint_status_rows()
         g.label(self.w['run_badge'],'保存中' if self.saving else '当前目标监测中' if current else
                 '其他目标监测中' if any_busy and not maintenance else '登录中' if maintenance else '待命')
+
+    # ==========================================
+    # Function: Reset only the selected stopped goal while preserving all editor drafts and historical orders.
+    # Method: Perform the journal transaction in a worker and clear scoped activity when GTK receives completion.
+    # ==========================================
+    def reset_goal(self):
+        self.editing()
+        self.commit_current()
+        identity=self.model.selected
+        self.saving=True
+        self.set_busy()
+
+        # ==========================================
+        # Function: Archive the selected execution without blocking the GTK main thread.
+        # Method: Publish fresh durable states with the captured identity and keep errors in the existing save channel.
+        # ==========================================
+        def reset():
+            try:
+                states=self.controller.reset_goal(identity)
+                self.controller.emit('goal_reset',{'identity':identity,'states':states})
+            except Exception as exc:
+                self.controller.emit('gtk_save_failed',str(exc))
+        self.save_worker=threading.Thread(target=reset,daemon=True,name='autoreserve-reset-goal')
+        self.save_worker.start()
 
     # ==========================================
     # Function: Restore execution logs and availability belonging to the selected target.
@@ -1368,7 +1396,18 @@ class GtkDesktop:
                 self.inventories=[]
                 self.render_logs()
         else:
-            self.controller.start(operation)
+            if operation=='login':
+                from .login_dialog import LoginDialog
+                dialog=LoginDialog(self)
+                self.login_dialog=dialog
+                try:
+                    self.controller.start(operation,login_surface=dialog.surface)
+                except Exception:
+                    dialog.close()
+                    self.login_dialog=None
+                    raise
+            else:
+                self.controller.start(operation)
         self.g.gtk_widget_hide(self.w['error_bar'])
         if operation=='run' and identity==self.model.selected:
             self.monitor_started=True
@@ -1557,6 +1596,59 @@ class GtkDesktop:
         body=self.box(True,14,'settings-body')
         g.gtk_container_add(window,body)
         return window,body,header
+
+    # ==========================================
+    # Function: Show venue initialization separately from official account authentication.
+    # Method: Drive a native close-only progress popup from worker events and retain a retry action on failure.
+    # ==========================================
+    def directory_progress(self, value):
+        g=self.g
+        stage=value['stage']
+        if stage=='start':
+            self.directory_dismissed=False
+        if stage in {'done','cancelled'}:
+            if self.directory_window:
+                g.gtk_widget_destroy(self.directory_window)
+            return
+        if self.directory_dismissed:
+            return
+        if not self.directory_window:
+            window,body,_=self.child_window('初始化场馆',460,190)
+            self.directory_window=window
+            self.directory_spinner=self.pack(body,g.gtk_spinner_new())
+            self.directory_caption=self.pack(body,self.label(value['message'],wrap=True))
+            self.directory_retry=self.pack(body,self.button('重新初始化',self.retry_directory))
+            g.connect(window,'destroy',lambda *_:setattr(self,'directory_window',None))
+            g.connect(window,'delete-event',lambda *_:self.cancel_directory(),count=3,returns=True)
+            g.gtk_widget_show_all(window)
+            g.gtk_window_present(window)
+        g.label(self.directory_caption,value['message'])
+        g.gtk_widget_set_visible(self.directory_retry,stage=='error')
+        g.gtk_widget_set_visible(self.directory_spinner,stage!='error')
+        if stage=='error':
+            g.gtk_spinner_stop(self.directory_spinner)
+        else:
+            g.gtk_spinner_start(self.directory_spinner)
+
+    # ==========================================
+    # Function: Cancel only a metadata/login operation from its initialization popup.
+    # Method: Request cooperative stop without changing saved login, catalog or goals.
+    # ==========================================
+    def cancel_directory(self):
+        self.directory_dismissed=True
+        if self.controller.maintenance_busy():
+            self.controller.stop()
+        if self.directory_window:
+            self.g.gtk_widget_destroy(self.directory_window)
+        return True
+
+    # ==========================================
+    # Function: Retry uncached venue initialization with the already saved authenticated session.
+    # Method: Reuse the catalog worker and its dedicated progress events rather than asking for another login.
+    # ==========================================
+    def retry_directory(self):
+        self.action('catalog')
+        self.directory_progress({'stage':'update','message':'正在重新初始化场馆…'})
 
     # ==========================================
     # Function: Present global typography/layout controls alongside protected execution settings.
@@ -1834,6 +1926,12 @@ class GtkDesktop:
                 self.render_sidebar()
             elif kind=='catalog':
                 self.render_catalog()
+            elif kind=='directory_progress':
+                self.directory_progress(value)
+            elif kind in {'login_complete','login_closed'}:
+                if self.login_dialog and value is self.login_dialog.surface:
+                    self.login_dialog.close()
+                    self.login_dialog=None
             elif kind=='courts':
                 self.refresh_courts()
             elif kind=='auth':
@@ -1851,6 +1949,20 @@ class GtkDesktop:
                     return False
                 if value['operation'] and not self.closing:
                     self.guard(lambda:self.action(value['operation'],value.get('identity')))
+            elif kind=='goal_reset':
+                self.saving=False
+                self.model.states={s['id']:s for s in value['states']}
+                self.activity.pop(value['identity'],None)
+                if self.model.selected==value['identity']:
+                    self.logs,self.inventories=[],[]
+                    self.snapshot,self.next_read_at=None,None
+                    self.monitor_started=False
+                    self.render_logs()
+                    self.render_inventory(None)
+                    self.g.label(self.w['status'],'目标已重置为待启动 · 历史订单保留')
+                self.render_sidebar()
+                if self.history_window:
+                    self.refresh_history()
             elif kind=='goal_deleted':
                 self.saving=False
                 was_selected=self.model.selected
@@ -1911,6 +2023,8 @@ class GtkDesktop:
         if logs:
             self.render_logs()
         self.set_busy()
+        if self.login_dialog and not self.login_dialog.closed:
+            self.guard(self.login_dialog.refresh)
         self.render_rush()
         if self.next_read_at and self.controller.is_running(self.model.selected):
             text=f"{self.controller.run_state(self.model.selected)['message']} · 下次读取约 {max(0,int(self.next_read_at-time.time()))} 秒后"
@@ -1967,7 +2081,10 @@ class GtkDesktop:
     def destroy(self):
         if self.destroyed:
             return
-        for window in [self.settings_window,self.notice_window,self.confirm_window,self.history_window]:
+        if self.login_dialog:
+            self.login_dialog.close(cancel=True)
+            self.login_dialog=None
+        for window in [self.settings_window,self.notice_window,self.confirm_window,self.history_window,self.directory_window]:
             if window:
                 self.g.gtk_widget_destroy(window)
         self.g.gtk_widget_destroy(self.window)
